@@ -8,7 +8,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { auth, db, orders, games, now } from '../config/firebase';
 import { log } from '../lib/logger';
-import { ADMIN_EMAIL, DEFAULT_REPLY_TO, SALES_FROM, send } from './email';
+import { DEFAULT_REPLY_TO, SALES_FROM, send } from './email';
 import { renderOrderEmail, type EmailKind } from './emailTemplates';
 import { resolvePlayerFields } from './catalog';
 import { getConfig } from './settings';
@@ -119,8 +119,7 @@ async function recordOrderEmailDiagnostics(
 }
 
 /**
- * Envía el correo que corresponde al estado de la orden al cliente y una copia
- * independiente al administrador (`soporterefillstore@gmail.com`). Nunca lanza.
+ * Envía el correo que corresponde al estado de la orden únicamente al cliente. Nunca lanza.
  */
 export async function sendOrderEmail(kind: EmailKind, orderId: string): Promise<void> {
   try {
@@ -172,53 +171,14 @@ export async function sendOrderEmail(kind: EmailKind, orderId: string): Promise<
 
     const rendered = renderOrderEmail(kind, order, config, playerFields);
 
-    const customerPromise = skipCustomerByPreference
-      ? Promise.resolve({ sent: true, reason: null, messageId: 'skipped-by-user-preference' })
-      : send({
+    const customerResult = skipCustomerByPreference
+      ? { sent: true, reason: null, messageId: 'skipped-by-user-preference' }
+      : await send({
           to: destinatario,
           from: SALES_FROM,
           replyTo: DEFAULT_REPLY_TO,
           ...rendered,
         });
-
-    const adminSubject = `[Copia Admin] ${rendered.subject} · Cliente: ${destinatario}`;
-    const adminPromise = send({
-      to: ADMIN_EMAIL,
-      from: SALES_FROM,
-      replyTo: destinatario || DEFAULT_REPLY_TO,
-      subject: adminSubject,
-      text: `Notificación administrativa de orden (${kind})\nCliente: ${destinatario}\n\n${rendered.text}`,
-      html: rendered.html,
-    });
-
-    const [customerSettled, adminSettled] = await Promise.allSettled([
-      customerPromise,
-      adminPromise,
-    ]);
-
-    const customerResult =
-      customerSettled.status === 'fulfilled'
-        ? customerSettled.value
-        : {
-            sent: false,
-            reason:
-              customerSettled.reason instanceof Error
-                ? customerSettled.reason.message
-                : String(customerSettled.reason),
-            messageId: null,
-          };
-
-    if (adminSettled.status === 'rejected' || !adminSettled.value.sent) {
-      const adminReason =
-        adminSettled.status === 'rejected'
-          ? String(adminSettled.reason)
-          : adminSettled.value.reason;
-      log.warn('No se pudo enviar copia de correo de orden al admin', {
-        orderId,
-        kind,
-        reason: adminReason,
-      });
-    }
 
     if (!customerResult.sent) {
       await release(orderId, kind);

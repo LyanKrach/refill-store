@@ -331,7 +331,6 @@ meRouter.post(
 
     const customerEmail = (profile.email || user.email || '').trim();
     const ticketUrl = `https://recargasrefillstore.com/soporte/${ref.id}`;
-    const adminTicketUrl = `https://recargasrefillstore.com/admin/soporte/${ref.id}`;
 
     await Promise.allSettled([
       adminAlerts.alert({
@@ -357,14 +356,6 @@ meRouter.post(
             html: `<div style="font-family:sans-serif;background:#0b0f19;color:#e5e7eb;padding:24px;border-radius:12px;max-width:540px;margin:0 auto;"><h2 style="color:#fff;margin-top:0;">Recibimos tu consulta de soporte</h2><p>Hola <strong>${profile.displayName || 'Jugador'}</strong>,</p><p>Tu ticket <strong>${body.subject}</strong> fue registrado y nuestro equipo lo revisará en breve.</p><div style="background:#111827;padding:14px;border-radius:8px;border:1px solid #374151;margin:16px 0;white-space:pre-wrap;">${body.message}</div><p><a href="${ticketUrl}" style="display:inline-block;padding:12px 24px;background:#e2373b;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;">Ver mi ticket</a></p></div>`,
           })
         : Promise.resolve(),
-      emailService.send({
-        to: emailService.ADMIN_EMAIL,
-        from: emailService.SUPPORT_FROM,
-        replyTo: customerEmail || emailService.DEFAULT_REPLY_TO,
-        subject: `[Soporte] Nuevo ticket: ${body.subject} (${customerEmail || user.uid})`,
-        text: `Nuevo ticket de soporte de ${profile.displayName || 'Cliente'} (${customerEmail || user.uid})\nAsunto: ${body.subject}\nOrden: ${body.orderId ?? 'N/A'}\n\n${body.message}\n\nAbrir en panel: ${adminTicketUrl}`,
-        html: `<div style="font-family:sans-serif;background:#0b0f19;color:#e5e7eb;padding:24px;border-radius:12px;max-width:540px;margin:0 auto;"><h2 style="color:#fff;margin-top:0;">Nuevo ticket de soporte</h2><p><strong>Cliente:</strong> ${profile.displayName || 'Cliente'} (${customerEmail || user.uid})</p><p><strong>Asunto:</strong> ${body.subject}</p><div style="background:#111827;padding:14px;border-radius:8px;border:1px solid #374151;margin:16px 0;white-space:pre-wrap;">${body.message}</div><p><a href="${adminTicketUrl}" style="display:inline-block;padding:12px 24px;background:#e2373b;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;">Responder en el panel</a></p></div>`,
-      }),
     ]);
 
     ok(res, { id: ref.id }, 201);
@@ -460,27 +451,14 @@ meRouter.post(
           : Promise.resolve(),
       ]);
     } else {
-      const customerEmail = (ticket.userEmail || profile.email || user.email || '').trim();
-      const adminTicketUrl = `https://recargasrefillstore.com/admin/soporte/${ticketId}`;
-
-      await Promise.allSettled([
-        adminAlerts.alert({
-          kind: 'ticket_reply',
-          severity: 'info',
-          title: `Respuesta del cliente · ${ticket.subject}`,
-          body: `${profile.displayName ?? profile.email ?? 'Un cliente'}: ${body.slice(0, 300)}`,
-          link: `/admin/soporte/${ticketId}`,
-          data: { ticketId, uid: user.uid },
-        }),
-        emailService.send({
-          to: emailService.ADMIN_EMAIL,
-          from: emailService.SUPPORT_FROM,
-          replyTo: customerEmail || emailService.DEFAULT_REPLY_TO,
-          subject: `[Soporte] Respuesta en ticket: ${ticket.subject} (${customerEmail || user.uid})`,
-          text: `Respuesta de ${profile.displayName || 'Cliente'} (${customerEmail || user.uid}) en ticket "${ticket.subject}":\n\n${body}\n\nAbrir en panel: ${adminTicketUrl}`,
-          html: `<div style="font-family:sans-serif;background:#0b0f19;color:#e5e7eb;padding:24px;border-radius:12px;max-width:540px;margin:0 auto;"><h2 style="color:#fff;margin-top:0;">Respuesta del cliente en soporte</h2><p><strong>Cliente:</strong> ${profile.displayName || 'Cliente'} (${customerEmail || user.uid})</p><p><strong>Ticket:</strong> ${ticket.subject}</p><div style="background:#111827;padding:14px;border-radius:8px;border:1px solid #374151;margin:16px 0;white-space:pre-wrap;">${body}</div><p><a href="${adminTicketUrl}" style="display:inline-block;padding:12px 24px;background:#e2373b;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;">Responder en el panel</a></p></div>`,
-        }),
-      ]);
+      await adminAlerts.alert({
+        kind: 'ticket_reply',
+        severity: 'info',
+        title: `Respuesta del cliente · ${ticket.subject}`,
+        body: `${profile.displayName ?? profile.email ?? 'Un cliente'}: ${body.slice(0, 300)}`,
+        link: `/admin/soporte/${ticketId}`,
+        data: { ticketId, uid: user.uid },
+      });
     }
 
     ok(res, { sent: true }, 201);
