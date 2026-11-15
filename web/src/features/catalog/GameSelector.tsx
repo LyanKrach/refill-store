@@ -73,6 +73,7 @@ export function GameSelector({ games, selectedId, onSelect, onEnd, hasMore = fal
           const selected = game.id === selectedId;
           const accent = game.accentColor || '#F03030';
           const accentSecondary = game.accentColorSecondary || '#3018F0';
+          const coverImage = game.logoUrl || game.coverUrl;
           const regionInfo = resolveRegionInfo(game.regionCode || game.region, game.name, game.shortName);
 
           return (
@@ -88,7 +89,7 @@ export function GameSelector({ games, selectedId, onSelect, onEnd, hasMore = fal
                 onClick={() => onSelect(game.id)}
                 data-selected={selected}
                 aria-pressed={selected}
-                className="neon-card sheen group w-[124px] p-2 text-left sm:w-[148px]"
+                className="neon-card sheen group relative block aspect-square w-[132px] overflow-hidden p-0 text-left sm:w-[152px]"
                 style={
                   {
                     '--accent': accent,
@@ -97,59 +98,76 @@ export function GameSelector({ games, selectedId, onSelect, onEnd, hasMore = fal
                 }
               >
                 <div
-                  className="relative aspect-square w-full overflow-hidden rounded-xl"
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0"
                   style={{
-                    background: game.logoUrl
-                      ? `url(${game.logoUrl}) center/cover`
-                      : `linear-gradient(145deg, ${accent} 0%, ${accentSecondary} 100%)`,
+                    background: `linear-gradient(145deg, ${accent} 0%, ${accentSecondary} 100%)`,
                   }}
-                >
-                  {/* Badge de Región en el carrusel */}
+                />
+
+                {coverImage ? (
+                  <img
+                    src={coverImage}
+                    alt=""
+                    loading="lazy"
+                    className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  />
+                ) : (
                   <span
-                    className={`absolute left-1.5 top-1.5 z-10 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-extrabold shadow-md backdrop-blur border ${
-                      regionInfo.isRegionRestricted
-                        ? 'bg-amber-950/95 text-amber-300 border-amber-500/50'
-                        : 'bg-emerald-950/90 text-emerald-300 border-emerald-500/40'
-                    }`}
+                    className="pointer-events-none absolute inset-0 flex items-center justify-center pb-5 text-4xl drop-shadow-lg"
+                    aria-hidden
                   >
-                    {regionInfo.isRegionRestricted ? (
-                      <MapPin className="h-2 w-2 shrink-0 text-amber-400" aria-hidden />
-                    ) : (
-                      <Globe className="h-2 w-2 shrink-0 text-emerald-400" aria-hidden />
-                    )}
-                    <span>{regionInfo.regionBadge}</span>
+                    <CurrencyIcon game={game} className="h-11 w-11 text-4xl" />
                   </span>
+                )}
 
-                  {!game.logoUrl && (
-                    <span
-                      className="absolute inset-0 flex items-center justify-center text-4xl drop-shadow-lg"
-                      aria-hidden
-                    >
-                      <CurrencyIcon game={game} className="h-11 w-11 text-4xl" />
-                    </span>
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/45 via-black/10 to-black/90"
+                />
+
+                {/* Badge de Región en el carrusel */}
+                <span
+                  className={`absolute left-2 top-2 z-10 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-extrabold shadow-md backdrop-blur border ${
+                    regionInfo.isRegionRestricted
+                      ? 'bg-amber-950/95 text-amber-300 border-amber-500/50'
+                      : 'bg-emerald-950/90 text-emerald-300 border-emerald-500/40'
+                  }`}
+                >
+                  {regionInfo.isRegionRestricted ? (
+                    <MapPin className="h-2 w-2 shrink-0 text-amber-400" aria-hidden />
+                  ) : (
+                    <Globe className="h-2 w-2 shrink-0 text-emerald-400" aria-hidden />
                   )}
+                  <span>{regionInfo.regionBadge}</span>
+                </span>
 
-                  {selected && (
-                    <motion.span
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      transition={{ type: 'spring', damping: 14, stiffness: 400 }}
-                      className="absolute right-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white text-black shadow-lg"
-                    >
-                      <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden />
-                    </motion.span>
+                {selected && (
+                  <motion.span
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={{ type: 'spring', damping: 14, stiffness: 400 }}
+                    className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white text-black shadow-lg"
+                  >
+                    <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden />
+                  </motion.span>
+                )}
+
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 p-2.5">
+                  <p
+                    className={`line-clamp-2 text-xs leading-tight transition-colors drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)] ${
+                      selected ? 'font-black text-white' : 'font-bold text-white/95 group-hover:text-white'
+                    }`}
+                    title={cleanGameTitle(game.name)}
+                  >
+                    {cleanGameTitle(game.name)}
+                  </p>
+                  {game.currencyLabel && (
+                    <p className="mt-0.5 truncate text-[10px] font-semibold text-white/80 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">
+                      {game.currencyLabel}
+                    </p>
                   )}
                 </div>
-
-                <p
-                  className={`mt-2 line-clamp-2 min-h-[2rem] leading-tight px-0.5 text-xs font-bold transition-colors ${
-                    selected ? 'text-white font-black' : 'text-slate-300 group-hover:text-white'
-                  }`}
-                  style={{ color: selected ? '#ffffff' : undefined }}
-                  title={cleanGameTitle(game.name)}
-                >
-                  {cleanGameTitle(game.name)}
-                </p>
               </button>
             </motion.li>
           );
