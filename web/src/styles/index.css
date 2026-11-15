@@ -11,6 +11,15 @@
     @apply border-base-600;
   }
 
+  html,
+  body,
+  #root {
+    overflow-x: hidden;
+    max-width: 100vw;
+    width: 100%;
+    position: relative;
+  }
+
   html {
     -webkit-tap-highlight-color: transparent;
     scroll-behavior: smooth;
@@ -18,8 +27,6 @@
 
   body {
     @apply bg-base text-slate-200 font-sans antialiased;
-    /* La tienda es mobile-first: se evita el rebote horizontal en móviles. */
-    overflow-x: hidden;
     min-height: 100dvh;
   }
 
@@ -36,7 +43,6 @@
   }
 
   #root {
-    position: relative;
     z-index: 1;
   }
 
