@@ -674,13 +674,13 @@ export function StoreLayout() {
   }, []);
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex min-h-dvh w-full max-w-full flex-col overflow-x-hidden">
       <Header onOpenMenu={() => setMenuOpen(true)} />
       <CategoryNav />
       <AnnouncementBar />
 
       {/* pb-24 deja aire para la navegación inferior en móvil. */}
-      <main className="flex-1 pb-24 md:pb-0">
+      <main className="w-full max-w-full flex-1 overflow-x-hidden pb-24 md:pb-0">
         <Outlet />
       </main>
 

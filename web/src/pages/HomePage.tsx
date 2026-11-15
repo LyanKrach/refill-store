@@ -374,7 +374,7 @@ export function HomePage() {
   ].filter((family) => (data?.familyCounts?.[family.id] ?? grouped.get(family.id)?.length ?? 0) > 0);
 
   return (
-    <div className="space-y-10">
+    <div className="w-full max-w-full space-y-10 overflow-x-hidden">
       <ActivityTicker />
       <Hero />
       <ActiveOrdersStrip />

@@ -40,7 +40,7 @@ export function ActivityTicker() {
   const loop = [...items, ...items];
 
   return (
-    <div className="relative border-y border-base-600/60 bg-base-900/70 py-2">
+    <div className="relative w-full max-w-full overflow-hidden border-y border-base-600/60 bg-base-900/70 py-2">
       <div className="marquee-mask overflow-hidden">
         <ul className="flex w-max animate-marquee items-center gap-8 whitespace-nowrap px-4 hover:[animation-play-state:paused]">
           {loop.map((item, index) => (
