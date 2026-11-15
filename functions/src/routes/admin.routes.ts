@@ -69,12 +69,35 @@ import type {
 
 export const adminRouter = Router();
 
+function isValidPushTarget(value: string): boolean {
+  if (!value) return true;
+  if (value.startsWith('/') && !value.startsWith('//')) return true;
+
+  const lower = value.toLowerCase();
+  if (!lower.startsWith('https://') && !lower.startsWith('http://') && !lower.startsWith('market://')) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return Boolean(parsed.hostname);
+    }
+    if (parsed.protocol === 'market:') {
+      return value.length > 'market://'.length && Boolean(parsed.hostname || parsed.pathname);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 const pushSchema = z.object({
   title: z.string().trim().min(3).max(60),
   body: z.string().trim().min(3).max(220),
-  link: z.string().trim().max(160).optional().nullable().refine(
-    (value) => !value || (value.startsWith('/') && !value.startsWith('//')),
-    'El enlace debe ser una ruta interna de la app.'
+  link: z.string().trim().max(500).optional().nullable().refine(
+    (value) => !value || isValidPushTarget(value),
+    'El enlace debe ser una ruta interna que empiece con / o una URL externa (https://, http://, market://).'
   ),
 });
 
@@ -85,10 +108,11 @@ adminRouter.post(
   rateLimit({ name: 'admin_app_push', max: 5, windowSeconds: 3600 }),
   asyncHandler(async (req, res) => {
     const body = parseBody(req, pushSchema);
+    const target = body.link ?? '';
     const messageId = await getMessaging().send({
       topic: 'refill-store-app',
       notification: { title: body.title, body: body.body },
-      data: { link: body.link ?? '' },
+      data: { link: target, route: target, url: target },
       android: { priority: 'high' },
       apns: { payload: { aps: { sound: 'default' } } },
     });

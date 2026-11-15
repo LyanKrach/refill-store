@@ -11,10 +11,36 @@ import { errorMessage } from '@/lib/utils';
 
 const TITLE_LIMIT = 60;
 const BODY_LIMIT = 220;
-const LINK_LIMIT = 160;
+const LINK_LIMIT = 500;
 
-function isInternalAppPath(value: string): boolean {
-  return !value || (value.startsWith('/') && !value.startsWith('//'));
+const QUICK_DESTINATIONS = [
+  { label: '▶️ Google Play (Actualizar App)', value: 'https://play.google.com/store/apps/details?id=com.refillstore.app' },
+  { label: '🎮 Recargas', value: '/familia/topup' },
+  { label: '🎁 Gift Cards', value: '/familia/gift_card' },
+  { label: '👛 RefillCoins', value: '/cuenta/saldo' },
+] as const;
+
+function isValidPushTarget(value: string): boolean {
+  if (!value) return true;
+  if (value.startsWith('/') && !value.startsWith('//')) return true;
+
+  const lower = value.toLowerCase();
+  if (!lower.startsWith('https://') && !lower.startsWith('http://') && !lower.startsWith('market://')) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return Boolean(parsed.hostname);
+    }
+    if (parsed.protocol === 'market:') {
+      return value.length > 'market://'.length && Boolean(parsed.hostname || parsed.pathname);
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 export function AdminPushNotifications() {
@@ -34,7 +60,7 @@ export function AdminPushNotifications() {
     && cleanBody.length >= 3
     && cleanBody.length <= BODY_LIMIT
     && cleanLink.length <= LINK_LIMIT
-    && isInternalAppPath(cleanLink);
+    && isValidPushTarget(cleanLink);
 
   const sendPush = async () => {
     setSending(true);
@@ -104,14 +130,34 @@ export function AdminPushNotifications() {
               hint={`${body.length}/${BODY_LIMIT} caracteres`}
             />
             <Input
-              label="Ruta de la app (opcional)"
+              label="Ruta de la app o enlace externo (opcional)"
               value={link}
               maxLength={LINK_LIMIT}
               onChange={(event) => { setLink(event.target.value); setSent(false); }}
-              placeholder="/familia/topup"
-              hint="Al tocar la notificación, abrirá esta sección dentro de la app. Usa una ruta que empiece con /; no se permiten enlaces externos."
-              error={cleanLink && !isInternalAppPath(cleanLink) ? 'Usa una ruta interna, por ejemplo /familia/topup.' : null}
+              placeholder="/familia/topup o https://play.google.com/store/apps/details?id=com.refillstore.app"
+              hint="Al tocar la notificación, abrirá esta ruta interna (ej. /familia/topup) o enlace externo (ej. Google Play, WhatsApp o web con https://)."
+              error={cleanLink && !isValidPushTarget(cleanLink) ? 'Usa una ruta interna (ej. /familia/topup) o un enlace válido con https://, http:// o market://.' : null}
             />
+
+            <div className="flex flex-wrap gap-2">
+              {QUICK_DESTINATIONS.map((preset) => {
+                const active = cleanLink === preset.value;
+                return (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => { setLink(preset.value); setSent(false); }}
+                    className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                      active
+                        ? 'border-neon-red/60 bg-neon-red/15 text-white'
+                        : 'border-base-500 bg-base-900 text-slate-300 hover:border-base-400 hover:text-white'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
 
             <Button
               fullWidth
@@ -139,7 +185,7 @@ export function AdminPushNotifications() {
                   </div>
                   <p className="mt-1 break-words text-sm font-bold text-white">{cleanTitle || 'Título de la notificación'}</p>
                   <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-300">{cleanBody || 'El mensaje aparecerá aquí.'}</p>
-                  {cleanLink && isInternalAppPath(cleanLink) && (
+                  {cleanLink && isValidPushTarget(cleanLink) && (
                     <p className="mt-2 truncate text-xs text-neon-crimson">Al tocar: {cleanLink}</p>
                   )}
                 </div>
