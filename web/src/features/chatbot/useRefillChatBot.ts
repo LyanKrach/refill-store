@@ -33,7 +33,7 @@ import { useAuth } from '@/providers/AuthProvider';
 import { useConfig } from '@/providers/ConfigProvider';
 import { api, ApiError, isGatewayTimeout } from '@/lib/api';
 import { readCreatorCode, clearCreatorCode } from '@/lib/creatorCode';
-import { formatBs, formatUsd, formatRefillCoins } from '@/lib/format';
+import { formatBs, formatProductBadge, formatUsd, formatRefillCoins } from '@/lib/format';
 import { errorMessage, openWhatsapp } from '@/lib/utils';
 import { buildTelegramOrderUrl, buildTelegramSupportUrl } from '@/lib/support';
 import { matchCategory, searchGames, isWalletQuery } from './fuzzy';
@@ -97,11 +97,14 @@ function gameCards(games: Game[]): ChatOption[] {
 }
 
 function productCards(products: PublicProduct[]): ChatOption[] {
-  return products.map((product) => ({
-    id: `pkg:${product.id}`,
-    label: product.badge ? `${product.name} · ${product.badge}` : product.name,
-    hint: `${formatUsd(product.priceUsd)} · ${formatBs(product.priceBs)}`,
-  }));
+  return products.map((product) => {
+    const badgeLabel = formatProductBadge(product);
+    return {
+      id: `pkg:${product.id}`,
+      label: badgeLabel ? `${product.name} · ${badgeLabel}` : product.name,
+      hint: `${formatUsd(product.priceUsd)} · ${formatBs(product.priceBs)}`,
+    };
+  });
 }
 
 export function useRefillChatBot() {

@@ -988,3 +988,105 @@ test('planCentralOneCombos: propagación de stock y protección de precios perso
   assert.equal(c682Unlocked.priceLocked, false);
   assert.equal(c682Unlocked.priceUsd, 6.00);
 });
+
+test('Free Fire LATAM Pase Booyah: mapea los 3 como Pase Booyah sin texto regional, 2 LIMITADO y 1 sin etiqueta', () => {
+  const mapping = sync.mapCentralOneCatalog([
+    item({
+      product_id: '93b813f6-829f-474c-b496-f1172a1e92b7',
+      product_family_id: 'free-fire',
+      sku: 'FF-RP-BOOYAH-NORTE',
+      name: 'Pase Booyah LATAM (Norte)',
+      reseller_price: '0.8269',
+      available_stock: 203,
+    }),
+    item({
+      product_id: 'e645430f-b142-46b4-885f-37a11cd2f236',
+      product_family_id: 'free-fire',
+      sku: 'FF-RP-BOOYAH-SUR',
+      name: 'Free Fire LATAM Sur · Pase Booyah',
+      reseller_price: '0.8269',
+      available_stock: 176,
+    }),
+    item({
+      product_id: '7eed3f72-b3fb-45e6-b8e5-9503e4aafcfa',
+      product_family_id: 'free-fire',
+      sku: '4-FF-BOOYAH',
+      name: 'Pase Booyah Premium de Free fire',
+      reseller_price: '1.6645',
+      available_stock: null,
+    }),
+    item({
+      product_id: '7de9a2ec-3c07-4a45-abc2-4c5ced4065e7',
+      product_family_id: 'free-fire',
+      sku: 'TOPUP-FREEFIRE-BR-FREEFIRE-BR-BOOY-ZM0UL',
+      name: 'Free Fire (BR) · Pase Booyah Premium Plus',
+      region: 'BR',
+      market: 'global',
+      reseller_price: '4.4828',
+      target_fields: ['game_user_id'],
+      available_stock: null,
+    }),
+  ]);
+
+  const ff = mapping.games.find((game) => game.id === 'co-topup-free-fire-latam');
+  assert.ok(ff, 'debe existir el plan co-topup-free-fire-latam');
+  assert.equal(ff.offers.length, 3, 'debe conservar los 3 Pase Booyah sin colapsarlos');
+
+  const byProductId = new Map(ff.offers.map((offer) => [offer.productId, offer]));
+  const norte = byProductId.get('93b813f6-829f-474c-b496-f1172a1e92b7');
+  const sur = byProductId.get('e645430f-b142-46b4-885f-37a11cd2f236');
+  const premium = byProductId.get('7eed3f72-b3fb-45e6-b8e5-9503e4aafcfa');
+
+  assert.equal(norte.label, 'Pase Booyah');
+  assert.equal(norte.badge, 'LIMITADO');
+  assert.equal(norte.stock, 203);
+  assert.equal(norte.providerAvailable, true);
+
+  assert.equal(sur.label, 'Pase Booyah');
+  assert.equal(sur.badge, 'LIMITADO');
+  assert.equal(sur.stock, 176);
+  assert.equal(sur.providerAvailable, true);
+
+  assert.equal(premium.label, 'Pase Booyah');
+  assert.equal(premium.badge, null);
+  assert.equal(premium.stock, null);
+  assert.equal(premium.providerAvailable, true);
+
+  const br = mapping.games.find((game) => game.id === 'co-topup-free-fire-br');
+  assert.equal(br.offers[0].label, 'Pase Booyah Premium Plus');
+
+  const outOfStockMapping = sync.mapCentralOneCatalog([
+    item({
+      product_id: '93b813f6-829f-474c-b496-f1172a1e92b7',
+      product_family_id: 'free-fire',
+      sku: 'FF-RP-BOOYAH-NORTE',
+      name: 'Pase Booyah LATAM (Norte)',
+      reseller_price: '0.8269',
+      available_stock: 0,
+      in_stock: false,
+    }),
+    item({
+      product_id: 'e645430f-b142-46b4-885f-37a11cd2f236',
+      product_family_id: 'free-fire',
+      sku: 'FF-RP-BOOYAH-SUR',
+      name: 'Pase Booyah LATAM (Sur)',
+      reseller_price: '0.8269',
+      available_stock: 15,
+    }),
+    item({
+      product_id: '7eed3f72-b3fb-45e6-b8e5-9503e4aafcfa',
+      product_family_id: 'free-fire',
+      sku: '4-FF-BOOYAH',
+      name: 'Pase Booyah Premium de Free fire',
+      reseller_price: '1.6645',
+      available_stock: null,
+    }),
+  ]);
+  const ffOut = outOfStockMapping.games.find((game) => game.id === 'co-topup-free-fire-latam');
+  const outById = new Map(ffOut.offers.map((offer) => [offer.productId, offer]));
+  assert.equal(outById.get('93b813f6-829f-474c-b496-f1172a1e92b7').providerAvailable, false);
+  assert.equal(outById.get('93b813f6-829f-474c-b496-f1172a1e92b7').stock, 0);
+  assert.equal(outById.get('93b813f6-829f-474c-b496-f1172a1e92b7').badge, 'LIMITADO');
+  assert.equal(outById.get('e645430f-b142-46b4-885f-37a11cd2f236').providerAvailable, true);
+  assert.equal(outById.get('7eed3f72-b3fb-45e6-b8e5-9503e4aafcfa').providerAvailable, true);
+});

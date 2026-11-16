@@ -326,3 +326,23 @@ export function auditActionLabel(action: string): string {
   };
   return labels[action] ?? action;
 }
+
+/**
+ * Etiqueta visible de un producto. Si tiene stock numérico positivo acotado
+ * (p. ej. Pases Booyah limitados, tokens o cajas Evo), muestra la cantidad real
+ * en vivo (`4 en stock`) salvo que tenga otra etiqueta propia (como `COMBO` o `GIFT CARD`).
+ */
+export function formatProductBadge(product: {
+  badge: string | null;
+  stock?: number | null;
+}): string | null {
+  if (
+    typeof product.stock === 'number' &&
+    product.stock > 0 &&
+    product.stock < 999_999 &&
+    (product.badge === 'LIMITADO' || !product.badge)
+  ) {
+    return `${product.stock} en stock`;
+  }
+  return product.badge;
+}

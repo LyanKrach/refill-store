@@ -1089,6 +1089,8 @@ export async function createOrder(
       const referenceCode = orderData.reference_code || null;
       const status = String(orderData.status || 'confirmed').toLowerCase();
 
+      invalidateLiveCatalogStockCache();
+
       return {
         success: true,
         httpStatus,
@@ -1542,7 +1544,7 @@ export async function testWebhook(): Promise<{ ok: true; message: string } | CoF
 }
 
 // ---------------------------------------------------------------------------
-// Caché corta de stock vivo en Central One (60 s)
+// Caché corta de stock vivo en Central One (30 s)
 // ---------------------------------------------------------------------------
 
 export interface LiveCatalogStockEntry {
@@ -1557,7 +1559,7 @@ export interface LiveAvailabilityResult {
   stock: number | null;
 }
 
-const LIVE_CATALOG_CACHE_TTL_MS = 60_000;
+const LIVE_CATALOG_CACHE_TTL_MS = 30_000;
 const LIVE_CATALOG_ERROR_COOLDOWN_MS = 10_000;
 
 let liveStockCache: {
@@ -1582,7 +1584,7 @@ export function productUsesCentralOne(
 }
 
 /**
- * Caché en memoria de corta duración (60 s) sobre `GET /catalog` de Central One.
+ * Caché en memoria de corta duración (30 s) sobre `GET /catalog` de Central One.
  * Evita mostrar paquetes con inventario limitado (tokens/cajas Evo) cuando se
  * acaban y permite que vuelvan a mostrarse automáticamente apenas el proveedor
  * repone unidades sin esperar al próximo cron.

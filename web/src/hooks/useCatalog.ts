@@ -14,7 +14,7 @@ import type { CatalogResponse, GameCatalogResponse, ProductResponse, PublicProdu
  * el cambio no se había guardado.
  */
 const CATALOG_OPTIONS = {
-  staleTime: 60_000,
+  staleTime: 30_000,
   refetchOnWindowFocus: true,
 } as const;
 
@@ -67,6 +67,8 @@ export function useGameCatalog(slug: string | undefined) {
     queryFn: () => api.get<GameCatalogResponse>(`/games/${slug}`, { anonymous: true }),
     enabled: Boolean(slug),
     ...CATALOG_OPTIONS,
+    // Acompaña el TTL de 30 s del stock en vivo de Central One en el backend.
+    refetchInterval: 30_000,
   });
 }
 

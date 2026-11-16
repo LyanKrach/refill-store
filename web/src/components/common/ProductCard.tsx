@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { Clock, MessageCircle, Star, Zap } from 'lucide-react';
 import { CurrencyIcon } from '@/components/common/CurrencyIcon';
 import { ROUTES } from '@/lib/constants';
-import { formatBs, formatUsd } from '@/lib/format';
+import { formatBs, formatProductBadge, formatUsd } from '@/lib/format';
 import { cn, hexToRgb } from '@/lib/utils';
 import type { Game, PublicProduct } from '@/types/models';
 
@@ -21,6 +21,7 @@ interface ProductCardProps {
  */
 export function ProductCard({ product, game, currencyIcon, className }: ProductCardProps) {
   const accent = game?.accentColor ?? '#F03030';
+  const displayBadge = formatProductBadge(product);
   const isManual = product.fulfillment === 'manual';
   const hasDiscount = product.compareAtUsd !== null && product.compareAtUsd > product.priceUsd;
   const soldOut = product.stock !== null && product.stock <= 0;
@@ -42,14 +43,14 @@ export function ProductCard({ product, game, currencyIcon, className }: ProductC
         soldOut ? undefined : { boxShadow: `0 8px 32px -22px rgba(${hexToRgb(accent)}, 0.9)` }
       }
     >
-      {(product.badge || product.featured || product.region) && (
+      {(displayBadge || product.featured || product.region) && (
         <span className="absolute right-0 top-3 flex flex-col items-end gap-1">
-          {product.badge && (
+          {displayBadge && (
             <span
               className="rounded-l-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white"
               style={{ backgroundColor: accent }}
             >
-              {product.badge}
+              {displayBadge}
             </span>
           )}
           {product.featured && (

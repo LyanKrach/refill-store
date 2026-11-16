@@ -273,7 +273,8 @@ export function GamePage() {
         key = `pkg:${p.amount}:${p.bonus || 0}`;
       } else {
         const clean = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
-        key = `special:${clean}`;
+        const isBooyahPass = /\bbooyah\b/i.test(name) && !/\btarjeta\b/i.test(name);
+        key = isBooyahPass ? `special:${clean}:${p.id}` : `special:${clean}`;
       }
 
       const existing = seen.get(key);

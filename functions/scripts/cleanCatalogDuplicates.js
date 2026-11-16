@@ -179,7 +179,11 @@ async function run() {
         const curr = extractCurrency(name) || currencyLabel.toLowerCase() || 'default';
         key = `pkg:${amount}:${bonus}:${curr}`;
       } else {
-        key = `special:${normalizeSpecialName(name)}`;
+        const cleanSpecial = normalizeSpecialName(name);
+        key =
+          cleanSpecial.includes('booyah') && !cleanSpecial.includes('tarjeta')
+            ? `booyah:${p.id}`
+            : `special:${cleanSpecial}`;
       }
 
       if (!groups.has(key)) groups.set(key, []);

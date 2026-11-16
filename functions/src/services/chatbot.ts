@@ -119,9 +119,16 @@ function matchingGames(query: string, games: Game[]): Game[] {
 function summarizeProduct(product: Product, game: Game, rate: number, roundToBs: number): string {
   const publicProduct = catalog.toPublicProduct(product, rate, roundToBs);
   const amount = publicProduct.amount + publicProduct.bonus;
+  const badgeLabel =
+    typeof publicProduct.stock === 'number' &&
+    publicProduct.stock > 0 &&
+    publicProduct.stock < 999_999 &&
+    (publicProduct.badge === 'LIMITADO' || !publicProduct.badge)
+      ? `${publicProduct.stock} en stock`
+      : publicProduct.badge;
   return [
     `${game.name}: ${publicProduct.name}`,
-    publicProduct.badge ? `etiqueta ${publicProduct.badge}` : '',
+    badgeLabel ? `etiqueta ${badgeLabel}` : '',
     `USD ${publicProduct.priceUsd}`,
     `Bs ${publicProduct.priceBs}`,
     amount > 0 ? `entrega ${amount} ${game.currencyLabel}` : '',

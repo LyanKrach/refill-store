@@ -182,14 +182,35 @@ export function centralOneOfferLabel(name: string, familyName: string): string {
   return full;
 }
 
-/** Nombres en inglés de las tarjetas de Free Fire → como las conoce el cliente. */
+/** Nombres en inglés/variantes de las tarjetas y pases de Free Fire → como las conoce el cliente. */
 function spanishFreeFireName(label: string): string {
   const normalized = label.toLowerCase().replace(/\s+/g, ' ').trim();
   if (/weekly\s+lite/.test(normalized)) return 'Tarjeta Semanal Lite';
   if (/weekly\s+(membership|card)/.test(normalized)) return 'Tarjeta Semanal';
   if (/monthly\s+(membership|card)/.test(normalized)) return 'Tarjeta Mensual';
   if (/booyah\s+pass\s+card/.test(normalized)) return 'Tarjeta Pase Booyah';
+  if (
+    /^(?:latam\s+(?:norte|sur)\s*[·:\-–—]\s*)?pase\s+booyah(?:\s+latam\s*\(?\s*(?:norte|sur)\s*\)?)?$/.test(normalized) ||
+    /^pase\s+booyah\s+premium(?:\s+de\s+free\s*fire)?$/.test(normalized)
+  ) {
+    return 'Pase Booyah';
+  }
   return label;
+}
+
+function isFreeFireLatamBooyahPass(isFreeFireLatam: boolean, label: string, kind: ProductKind): boolean {
+  if (!isFreeFireLatam || kind !== 'special') return false;
+  return /\bbooyah\b/i.test(label) && !/\b(?:tarjeta|card)\b/i.test(label);
+}
+
+function isLimitedFreeFireBooyah(
+  item: Pick<CoCatalogItem, 'name' | 'sku'>,
+  stock: number | null
+): boolean {
+  if (stock !== null) return true;
+  const rawName = String(item.name ?? '');
+  const rawSku = String(item.sku ?? '');
+  return /\blatam\s+(?:norte|sur)\b/i.test(rawName) || /^FF-RP-BOOYAH-(?:NORTE|SUR)$/i.test(rawSku);
 }
 
 /**
@@ -552,6 +573,8 @@ export interface CentralOneOffer {
   /** Claves de `target_payload` (`[]` en gift cards). */
   targetFields: string[];
   isFreeFireCard: boolean;
+  /** Conserva variantes distintas del mismo nombre (p. ej. los 3 Pase Booyah) y sincroniza nombre/etiqueta. */
+  preserveDistinct?: boolean;
   sortOrder: number;
   badge: string | null;
   deliveryEtaMinutes: number;
@@ -795,15 +818,22 @@ export function mapCentralOneCatalog(
       }
       const card = isFreeFireCard(familyName, `${item.name ?? ''} ${rawLabel}`);
       const label = FREE_FIRE_NAME.test(familyName) ? spanishFreeFireName(rawLabel) : rawLabel;
-      const kind = classifyCentralOneKind(rawLabel, family);
-      const parsed = parseOfferAmount(rawLabel);
+      const kind = classifyCentralOneKind(label, family);
+      const parsed = parseOfferAmount(label);
       const amount =
         family === 'gift_card'
           ? 1
           : kind === 'level_up'
-            ? levelOf(rawLabel) ?? parsed.amount ?? 0
+            ? levelOf(label) ?? parsed.amount ?? 0
             : parsed.amount ?? 0;
       const stock = stockOf(item);
+      const distinctBooyah = isFreeFireLatamBooyahPass(isFreeFireLatam, label, kind);
+      const badge =
+        family === 'gift_card'
+          ? 'GIFT CARD'
+          : distinctBooyah && isLimitedFreeFireBooyah(item, stock)
+            ? 'LIMITADO'
+            : null;
       offers.push({
         docId: coProductId(id, item.product_id),
         productId: item.product_id,
@@ -818,8 +848,9 @@ export function mapCentralOneCatalog(
         bonus: family === 'topup' ? parsed.bonus : 0,
         targetFields,
         isFreeFireCard: card,
+        preserveDistinct: distinctBooyah,
         sortOrder: family === 'topup' ? amount || 99 : 99,
-        badge: family === 'gift_card' ? 'GIFT CARD' : null,
+        badge,
         deliveryEtaMinutes: family === 'topup' ? 2 : 5,
       });
     }
@@ -833,7 +864,9 @@ export function mapCentralOneCatalog(
     for (const offer of offers) {
       const isPkg = offer.kind === 'package' || (offer.amount > 0 && offer.kind !== 'special');
       let key: string;
-      if (isPkg && offer.amount > 0) {
+      if (offer.preserveDistinct) {
+        key = `booyah:${offer.productId}`;
+      } else if (isPkg && offer.amount > 0) {
         key = `pkg:${offer.amount}:${offer.bonus}:${currency.label.toLowerCase()}`;
       } else {
         const clean = offer.label.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
@@ -1220,7 +1253,7 @@ export function planFreeFireExtras(input: FreeFireExtrasInput): FreeFireExtrasPl
           compareAtUsd: null,
           calls,
           imageUrl: extraImage(offer.label, offer.kind),
-          badge: null,
+          badge: offer.badge ?? null,
           active: !offer.isFreeFireCard,
           adminDisabled: offer.isFreeFireCard,
           featured: false,
@@ -1975,6 +2008,7 @@ function upsertGame(
     const active = offer.providerAvailable && !adminDisabled;
     const desiredImageUrl = (current.imageUrl as string | undefined) || (plan.family === 'gift_card' ? gameImage : extraImage(offer.label, offer.kind));
     const changed = changedPatch(current, {
+      ...(offer.preserveDistinct ? { name: offer.label, badge: offer.badge } : {}),
       provider: 'centralone',
       providerOfferId: offer.productId,
       calls,
@@ -2531,8 +2565,8 @@ export async function runCentralOneSync(opts: {
       if (!current || seenProducts.has(id)) continue;
       seenProducts.add(id);
       if (current.provider !== 'centralone' || protectedGames.has(String(current.gameId ?? ''))) continue;
-      if (current.active === false) continue;
-      ctx.writer.set(products().doc(id), { active: false, updatedAt: ctx.timestamp });
+      if (current.active === false && current.stock === 0) continue;
+      ctx.writer.set(products().doc(id), { active: false, stock: 0, updatedAt: ctx.timestamp });
       summary.productsUpdated += 1;
       await ctx.writer.maybeFlush();
     }
