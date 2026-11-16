@@ -203,6 +203,30 @@ function isFreeFireLatamBooyahPass(isFreeFireLatam: boolean, label: string, kind
   return /\bbooyah\b/i.test(label) && !/\b(?:tarjeta|card)\b/i.test(label);
 }
 
+function resolveFreeFireLatamBooyahLabel(
+  item: Pick<CoCatalogItem, 'product_id' | 'name' | 'sku'>,
+  fallbackLabel: string
+): string {
+  const rawId = String(item.product_id ?? '').trim().toLowerCase();
+  const rawName = String(item.name ?? '');
+  const rawSku = String(item.sku ?? '');
+  if (
+    rawId === '93b813f6-829f-474c-b496-f1172a1e92b7' ||
+    /^FF-RP-BOOYAH-NORTE$/i.test(rawSku) ||
+    /\bnorte\b/i.test(rawName)
+  ) {
+    return 'Pase Booyah Premium';
+  }
+  if (
+    rawId === 'e645430f-b142-46b4-885f-37a11cd2f236' ||
+    /^FF-RP-BOOYAH-SUR$/i.test(rawSku) ||
+    /\bsur\b/i.test(rawName)
+  ) {
+    return 'Booyah Pass';
+  }
+  return fallbackLabel;
+}
+
 function isLimitedFreeFireBooyah(
   item: Pick<CoCatalogItem, 'name' | 'sku'>,
   stock: number | null
@@ -817,7 +841,10 @@ export function mapCentralOneCatalog(
         rawLabel = `${rawLabel.trim()} ${currency.label}`;
       }
       const card = isFreeFireCard(familyName, `${item.name ?? ''} ${rawLabel}`);
-      const label = FREE_FIRE_NAME.test(familyName) ? spanishFreeFireName(rawLabel) : rawLabel;
+      const baseLabel = FREE_FIRE_NAME.test(familyName) ? spanishFreeFireName(rawLabel) : rawLabel;
+      const preliminaryKind = classifyCentralOneKind(baseLabel, family);
+      const distinctBooyah = isFreeFireLatamBooyahPass(isFreeFireLatam, baseLabel, preliminaryKind);
+      const label = distinctBooyah ? resolveFreeFireLatamBooyahLabel(item, baseLabel) : baseLabel;
       const kind = classifyCentralOneKind(label, family);
       const parsed = parseOfferAmount(label);
       const amount =
@@ -827,7 +854,6 @@ export function mapCentralOneCatalog(
             ? levelOf(label) ?? parsed.amount ?? 0
             : parsed.amount ?? 0;
       const stock = stockOf(item);
-      const distinctBooyah = isFreeFireLatamBooyahPass(isFreeFireLatam, label, kind);
       const badge =
         family === 'gift_card'
           ? 'GIFT CARD'

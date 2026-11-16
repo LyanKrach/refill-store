@@ -342,9 +342,17 @@ export function toPublicProduct(product: Product, rate: number, roundToBs: numbe
   } = product;
 
   const notice = product.regionNotice || extractPackageRegionNotice(product.name) || undefined;
+  const badge =
+    typeof product.stock === 'number' &&
+    product.stock > 0 &&
+    product.stock < 999_999 &&
+    (product.badge === 'LIMITADO' || !product.badge)
+      ? `${product.stock} en stock`
+      : product.badge;
 
   return {
     ...rest,
+    badge,
     regionNotice: notice,
     priceBs: usdToBs(product.priceUsd, rate, roundToBs),
   };

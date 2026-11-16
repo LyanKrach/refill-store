@@ -989,7 +989,7 @@ test('planCentralOneCombos: propagación de stock y protección de precios perso
   assert.equal(c682Unlocked.priceUsd, 6.00);
 });
 
-test('Free Fire LATAM Pase Booyah: mapea los 3 como Pase Booyah sin texto regional, 2 LIMITADO y 1 sin etiqueta', () => {
+test('Free Fire LATAM Pase Booyah: mapea el estándar como Pase Booyah y los 2 limitados con nombres distintos + LIMITADO', () => {
   const mapping = sync.mapCentralOneCatalog([
     item({
       product_id: '93b813f6-829f-474c-b496-f1172a1e92b7',
@@ -1037,12 +1037,12 @@ test('Free Fire LATAM Pase Booyah: mapea los 3 como Pase Booyah sin texto region
   const sur = byProductId.get('e645430f-b142-46b4-885f-37a11cd2f236');
   const premium = byProductId.get('7eed3f72-b3fb-45e6-b8e5-9503e4aafcfa');
 
-  assert.equal(norte.label, 'Pase Booyah');
+  assert.equal(norte.label, 'Pase Booyah Premium');
   assert.equal(norte.badge, 'LIMITADO');
   assert.equal(norte.stock, 203);
   assert.equal(norte.providerAvailable, true);
 
-  assert.equal(sur.label, 'Pase Booyah');
+  assert.equal(sur.label, 'Booyah Pass');
   assert.equal(sur.badge, 'LIMITADO');
   assert.equal(sur.stock, 176);
   assert.equal(sur.providerAvailable, true);

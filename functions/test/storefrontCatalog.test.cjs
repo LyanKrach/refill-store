@@ -277,3 +277,26 @@ test('pickCentralOneValidationTarget: usa la oferta elegida si sirve; si no, la 
   // Un producto de otro juego nunca se usa.
   assert.equal(catalog.pickCentralOneValidationTarget(g, [{ ...cheap, gameId: 'otro' }], cheap.id), null);
 });
+
+test('toPublicProduct: muestra "X en stock" para LIMITADO y productos sin badge con stock acotado', () => {
+  assert.equal(
+    catalog.toPublicProduct(product({ badge: 'LIMITADO', stock: 4, priceUsd: 1.5 }), 1000, 1).badge,
+    '4 en stock'
+  );
+  assert.equal(
+    catalog.toPublicProduct(product({ badge: null, stock: 5335, priceUsd: 0.26 }), 1000, 1).badge,
+    '5335 en stock'
+  );
+  assert.equal(
+    catalog.toPublicProduct(product({ badge: null, stock: null, priceUsd: 2.15 }), 1000, 1).badge,
+    null
+  );
+  assert.equal(
+    catalog.toPublicProduct(product({ badge: 'GIFT CARD', stock: 50, priceUsd: 10 }), 1000, 1).badge,
+    'GIFT CARD'
+  );
+  assert.equal(
+    catalog.toPublicProduct(product({ badge: 'COMBO', stock: 12, priceUsd: 5 }), 1000, 1).badge,
+    'COMBO'
+  );
+});
