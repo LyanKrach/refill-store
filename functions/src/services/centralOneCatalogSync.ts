@@ -105,7 +105,7 @@ const LATAM = new Set([
   'PY', 'UY', 'CR', 'PA', 'DO', 'GT', 'HN', 'SV', 'NI', 'PR', 'CU', 'AMERICAS',
 ]);
 
-const FOREIGN_REGION = /\b(?:CIS|MENA|ASIA|SEA|EU|UK|US|CA|RU|UA|TR|IN|ID|MY|PH|TH|KR|JP|CN|TW|HK|AU|NZ|AFRICA|AE|SA)\b/i;
+const FOREIGN_REGION = /\b(?:CIS|MENA|ASIA|SEA|EU|UK|US|CA|RU|UA|TR|IN|ID|MY|PH|SG|TH|KR|JP|CN|TW|HK|AU|NZ|AFRICA|AE|SA)\b/i;
 
 export function visibleInLatam(family: CoFamily, name: string, note: string | null, region: string | null): boolean {
   const source = `${region ?? ''} ${(name ?? '')} ${note ?? ''}`.toUpperCase();
@@ -1127,6 +1127,8 @@ function packageIdsOf(product: Pick<Product, 'calls'> | Partial<Product>): strin
 
 function extraImage(label: string, kind: ProductKind): string {
   if (kind === 'level_up') return '/products/aumento-nivel.svg';
+  if (/twilight|crepuscular/i.test(label)) return '/products/twilight-pass.svg';
+  if (/[eé]lite/i.test(label)) return '/products/pase-elite.svg';
   if (/weekly|semanal/i.test(label)) return '/products/tarjeta-semanal.svg';
   if (/monthly|mensual/i.test(label)) return '/products/tarjeta-mensual.svg';
   if (/booyah/i.test(label)) return '/products/pase-booyah.svg';
@@ -1907,6 +1909,10 @@ export function newCentralOneGameDoc(
 ): DocData {
   const meta = FAMILY_META[plan.family];
   const first = plan.playerFields[0];
+  const hasOffers =
+    providerControlled.productCount !== undefined
+      ? Number(providerControlled.productCount) > 0
+      : plan.offers.some((offer) => offer.providerAvailable);
   return {
     ...providerControlled,
     name: plan.name,
@@ -1923,16 +1929,18 @@ export function newCentralOneGameDoc(
     accentColor: presentation?.accentColor ?? meta.accent,
     accentColorSecondary: presentation?.accentColorSecondary ?? meta.accentSecondary,
     // El Free Fire de Central One convive con los dos de Inefable: nace
-    // apagado y el cliente lo enciende cuando decida.
-    active: !plan.isFreeFireLatam,
+    // apagado y el cliente lo enciende cuando decida. Tampoco nace visible un
+    // juego si todas sus ofertas llegaron agotadas.
+    active: !plan.isFreeFireLatam && hasOffers,
     sortOrder: calculateGameSortOrder({
       regionCode: plan.region,
       name: plan.name,
       providerFamily: plan.family,
       salesCount: 0,
+      productCount: providerControlled.productCount !== undefined ? Number(providerControlled.productCount) : plan.offers.length,
     }),
     salesCount: 0,
-    hiddenReason: null,
+    hiddenReason: !plan.isFreeFireLatam && !hasOffers ? 'out_of_stock' : null,
     providerSyncedAt: timestamp,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -1956,6 +1964,7 @@ function upsertGame(
   const regionInfo = resolveRegionInfo(plan.region, plan.name, plan.familyName);
 
   const sold: number[] = [];
+  const liveOfferIds: string[] = [];
   for (const offer of plan.offers) {
     const current = existingProducts.get(offer.docId);
     const calls: DispatchCall[] = [
@@ -2011,7 +2020,10 @@ function upsertGame(
         false
       );
       ctx.summary.productsCreated += 1;
-      if (active) sold.push(freshPrice);
+      if (active) {
+        sold.push(freshPrice);
+        liveOfferIds.push(offer.productId);
+      }
       continue;
     }
 
@@ -2031,7 +2043,9 @@ function upsertGame(
         });
       }
     }
-    const active = offer.providerAvailable && !adminDisabled;
+    const pausedByDispatch = centralOne.isProductDispatchPaused(current as Partial<Product>);
+    const active = offer.providerAvailable && !adminDisabled && !pausedByDispatch;
+    const effectiveStock = pausedByDispatch ? 0 : offer.stock;
     const desiredImageUrl = (current.imageUrl as string | undefined) || (plan.family === 'gift_card' ? gameImage : extraImage(offer.label, offer.kind));
     const changed = changedPatch(current, {
       ...(offer.preserveDistinct ? { name: offer.label, badge: offer.badge } : {}),
@@ -2041,7 +2055,7 @@ function upsertGame(
       targetFields: [...offer.targetFields],
       costUsd: offer.costUsd,
       priceUsd,
-      stock: offer.stock,
+      stock: effectiveStock,
       active,
       imageUrl: desiredImageUrl,
       region: plan.region,
@@ -2058,7 +2072,10 @@ function upsertGame(
       ctx.writer.set(products().doc(offer.docId), { ...changed, providerSyncedAt: ts, updatedAt: ts });
       ctx.summary.productsUpdated += 1;
     }
-    if (active) sold.push(priceUsd);
+    if (active) {
+      sold.push(priceUsd);
+      liveOfferIds.push(offer.productId);
+    }
   }
 
   const isBs = isBloodStrike(`${plan.id} ${plan.name}`);
@@ -2085,6 +2102,7 @@ function upsertGame(
     validatesPlayerId: plan.validatesPlayerId,
     productCount: sold.length,
     minPriceUsd: sold.length > 0 ? round(Math.min(...sold), 2) : null,
+    liveOfferIds,
     providerRemoved: false,
   };
 
@@ -2096,9 +2114,14 @@ function upsertGame(
 
   const proposed: DocData = { ...providerControlled };
   if (!ctx.coverageKnown) delete proposed.validatesPlayerId;
-  // Sólo vuelve solo lo que ocultó la sync por desaparecido; lo que apagó el
-  // admin o el retiro de FazerCards no se toca.
-  if (existingGame.hiddenReason === 'provider_removed') {
+  // Si todas las ofertas quedaron agotadas o pausadas, se oculta automáticamente
+  // con `hiddenReason: 'out_of_stock'` (sin pisar si ya lo había apagado el admin).
+  if (sold.length === 0) {
+    if (existingGame.active !== false) {
+      proposed.active = false;
+      proposed.hiddenReason = 'out_of_stock';
+    }
+  } else if (existingGame.hiddenReason === 'provider_removed' || existingGame.hiddenReason === 'out_of_stock') {
     proposed.active = true;
     proposed.hiddenReason = null;
   }
@@ -2127,7 +2150,13 @@ async function markRemoved(
     if (!id.startsWith('co-') || !game.providerSyncedAt || seenGames.has(id) || protectedGames.has(id)) continue;
     if (inSkippedFamily(id)) continue;
     if (game.providerRemoved === true && game.active === false) continue;
-    const patch: DocData = { providerRemoved: true, updatedAt: ctx.timestamp };
+    const patch: DocData = {
+      providerRemoved: true,
+      productCount: 0,
+      minPriceUsd: null,
+      liveOfferIds: [],
+      updatedAt: ctx.timestamp,
+    };
     // Si el admin ya lo había apagado se respeta su motivo: así no vuelve solo.
     if (game.active !== false) {
       patch.active = false;
@@ -2639,6 +2668,17 @@ export async function runCentralOneSync(opts: {
     summary.aborted = summary.aborted ?? 'exception';
     summary.errors.push(message.slice(0, 300));
     log.error('Sync de Central One: excepción', { error: message });
+  }
+
+  if (
+    summary.productsCreated > 0 ||
+    summary.productsUpdated > 0 ||
+    summary.productsRemoved > 0 ||
+    summary.gamesCreated > 0 ||
+    summary.gamesUpdated > 0 ||
+    summary.gamesRemoved > 0
+  ) {
+    centralOne.invalidateLiveCatalogStockCache();
   }
 
   return finish(opts, summary, previousState, mappingRan);

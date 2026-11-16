@@ -198,6 +198,7 @@ export function useRefillChatBot() {
       ...(gameKeys.data?.games ?? []),
       ...(catalog.data?.games ?? []),
     ].forEach((item) => {
+      if (item.active === false || (item.productCount !== undefined && item.productCount <= 0)) return;
       if (!unique.has(item.id)) unique.set(item.id, item);
     });
     return [...unique.values()].sort((a, b) => a.sortOrder - b.sortOrder);

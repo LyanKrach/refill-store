@@ -26,6 +26,8 @@ export function ProductCard({ product, game, currencyIcon, className }: ProductC
   const hasDiscount = product.compareAtUsd !== null && product.compareAtUsd > product.priceUsd;
   const soldOut = product.stock !== null && product.stock <= 0;
 
+  if (!product.active || soldOut) return null;
+
   const total = product.amount + product.bonus;
 
   return (

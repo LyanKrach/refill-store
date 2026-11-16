@@ -112,6 +112,8 @@ export interface Game {
   /** Resumen precalculado para que la portada no lea miles de productos. */
   productCount?: number;
   minPriceUsd?: number | null;
+  /** IDs de ofertas de Central One vendibles del juego; permite ocultar categorías vacías al instante con /catalog vivo. */
+  liveOfferIds?: string[];
   /** Cómo se llama la moneda del juego en la interfaz: Diamantes, Gold… */
   currencyLabel: string;
   currencyIcon: string;
@@ -170,8 +172,9 @@ export interface Game {
  * Motivo con el que la sincronización ocultó un juego:
  *  - `provider_removed`  Central One dejó de ofrecerlo.
  *  - `provider_migrated` Era de FazerCards y se retiró al pasar a Central One.
+ *  - `out_of_stock`      Todos los paquetes del juego quedaron agotados o pausados.
  */
-export type GameHiddenReason = 'provider_removed' | 'provider_migrated';
+export type GameHiddenReason = 'provider_removed' | 'provider_migrated' | 'out_of_stock';
 
 // ---------------------------------------------------------------------------
 // Productos
@@ -317,6 +320,10 @@ export interface Product {
   priceLocked?: boolean;
   /** El proveedor ya no lo ofrece; oculto por la sincronización, no borrado. */
   providerRemoved?: boolean;
+  /** Pausa automática temporal cuando falla el despacho por falta de stock o línea caída. */
+  providerPausedUntil?: TimestampLike | null;
+  providerPauseReason?: string | null;
+  consecutiveDispatchFailures?: number;
   /** Última vez que la sincronización del proveedor escribió este producto. */
   providerSyncedAt?: TimestampLike | null;
   /**

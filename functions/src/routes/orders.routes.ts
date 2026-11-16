@@ -17,6 +17,7 @@ import * as usersService from '../services/users';
 import * as couponsService from '../services/coupons';
 import * as creatorsService from '../services/creators';
 import * as catalog from '../services/catalog';
+import * as centralOne from '../services/centralOne';
 import { listEvents } from '../services/orderEvents';
 import { getConfig } from '../services/settings';
 import { assertStorefrontGame } from '../lib/storefront';
@@ -304,7 +305,16 @@ ordersRouter.post(
     ]);
     const game = await catalog.getGame(product.gameId);
     assertStorefrontGame(req, game);
-    assertOrderQuantity(product, game, body.quantity);
+
+    const stockMap = centralOne.productUsesCentralOne(product)
+      ? await centralOne.getLiveCatalogStockMap()
+      : null;
+    const availability = centralOne.resolveProductLiveAvailability(product, stockMap);
+    const effectiveProduct = availability.checked
+      ? { ...product, active: availability.available, stock: availability.stock }
+      : product;
+    catalog.assertPurchasable(effectiveProduct, game);
+    assertOrderQuantity(effectiveProduct, game, body.quantity);
 
     const subtotalUsd = round(product.priceUsd * body.quantity, 4);
     const tierPercent = await usersService.tierDiscountPercent(profile.tier);

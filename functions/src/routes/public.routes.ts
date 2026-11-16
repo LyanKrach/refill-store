@@ -26,7 +26,7 @@ import { rateLimit } from '../middleware/rateLimit';
 import * as fazerCards from '../services/fazercards';
 import * as chatbotService from '../services/chatbot';
 import * as centralOne from '../services/centralOne';
-import { failedPrecondition, invalidArgument, providerError } from '../lib/errors';
+import { failedPrecondition, invalidArgument, notFound, providerError } from '../lib/errors';
 import { resolveFazerValidationCategory } from '../lib/validation';
 
 /**
@@ -168,21 +168,37 @@ publicRouter.get(
           };
         })
       );
+      const anyLiveIds = results.some((r) =>
+        r.items.some((g) => g.provider === 'centralone' && Array.isArray(g.liveOfferIds) && g.liveOfferIds.length > 0)
+      );
+      const stockMap = anyLiveIds ? await centralOne.getLiveCatalogStockMap() : null;
+      const visibleResults = await Promise.all(
+        results.map(async (result) => {
+          const filtered = await filterLiveVisibleGames(result.items, stockMap);
+          const hidden = result.items.length - filtered.length;
+          return {
+            ...result,
+            items: filtered,
+            total: result.total === undefined ? undefined : Math.max(0, result.total - hidden),
+            categoryTotal: result.categoryTotal === undefined ? undefined : Math.max(0, result.categoryTotal - hidden),
+          };
+        })
+      );
       ok(res, {
         rate: config.rate.value,
-        games: results.flatMap((result) => result.items.map(catalog.toPublicGame)),
+        games: visibleResults.flatMap((result) => result.items.map(catalog.toPublicGame)),
         products: [],
         // En portada los dos Free Fire de Inefable llegan fijados (no por el
         // conteo ni como «extras»), así que se suman aquí, cada uno una vez.
         // Antes sólo contaba `free-fire` y `freefire-id` quedaba fuera del total.
-        familyCounts: Object.fromEntries(results.flatMap((result) =>
+        familyCounts: Object.fromEntries(visibleResults.flatMap((result) =>
           result.categoryTotal === undefined ? [] : [[result.family, result.categoryTotal +
             (result.family === 'topup'
               ? result.items.filter((game) => game.id === INEFABLE_FREE_FIRE_ID || game.id === INEFABLE_FREE_FIRE_ID_NEW).length
               : 0)]]
         )),
-        nextCursor: family ? results[0]?.nextCursor ?? null : null,
-        total: family ? results[0]?.total : undefined,
+        nextCursor: family ? visibleResults[0]?.nextCursor ?? null : null,
+        total: family ? visibleResults[0]?.total : undefined,
       });
       return;
     }
@@ -196,10 +212,12 @@ publicRouter.get(
       )
     ).flat();
     const productList = await filterAvailableProducts(rawProducts);
+    const gamesWithProducts = new Set(productList.map((product) => product.gameId));
+    const visibleGames = gameList.filter((game) => gamesWithProducts.has(game.id));
 
     ok(res, {
       rate: config.rate.value,
-      games: gameList.map(catalog.toPublicGame),
+      games: visibleGames.map(catalog.toPublicGame),
       products: productList.map((product) =>
         catalog.toPublicProduct(product, config.rate.value, config.pricing.roundToBs)
       ),
@@ -222,6 +240,27 @@ async function filterAvailableProducts(productList: Product[]): Promise<Product[
     );
   }
   return available;
+}
+
+/** Oculta juegos de Central One sin ningún paquete disponible en vivo. */
+async function filterLiveVisibleGames(
+  gameList: Game[],
+  prefetchedStockMap?: Map<string, centralOne.LiveCatalogStockEntry> | null
+): Promise<Game[]> {
+  const withCount = gameList.filter((game) => game.active !== false && (game.productCount ?? 1) > 0);
+  const needsStockMap =
+    prefetchedStockMap === undefined &&
+    withCount.some(
+      (game) => game.provider === 'centralone' && Array.isArray(game.liveOfferIds) && game.liveOfferIds.length > 0
+    );
+  const stockMap = prefetchedStockMap !== undefined ? prefetchedStockMap : needsStockMap ? await centralOne.getLiveCatalogStockMap() : null;
+  if (!stockMap) return withCount;
+  return withCount.filter((game) => {
+    if (game.provider !== 'centralone' || !Array.isArray(game.liveOfferIds) || game.liveOfferIds.length === 0) {
+      return true;
+    }
+    return game.liveOfferIds.some((offerId) => stockMap.get(offerId)?.inStock === true);
+  });
 }
 
 /** Producto directo para que el checkout no dependa del catálogo entero. */
@@ -263,6 +302,7 @@ publicRouter.get(
       catalog.listProducts({ gameId }),
     ]);
     assertStorefrontGame(req, game);
+    if (!game.active) throw notFound('Ese juego no está disponible ahora.');
     const productList = await filterAvailableProducts(rawProducts);
 
     ok(res, {
@@ -419,7 +459,8 @@ async function validateCentralOneCatalogGame(
   }
   if (!centralOne.isCentralOneConfigured()) return unverifiedResponse();
 
-  const productList = await catalog.listProducts({ gameId: game.id, onlyActive: true });
+  const rawProducts = await catalog.listProducts({ gameId: game.id });
+  const productList = await filterAvailableProducts(rawProducts);
   const target = catalog.pickCentralOneValidationTarget(game, productList, input.productId ?? null);
   if (!target || target.targetFields.length === 0) return unverifiedResponse();
 

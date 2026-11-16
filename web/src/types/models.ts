@@ -107,8 +107,8 @@ export interface Game {
   updatedAt: TimestampLike;
 }
 
-/** `provider_removed` = Central One dejó de ofrecerlo; `provider_migrated` = era de FazerCards. */
-export type GameHiddenReason = 'provider_removed' | 'provider_migrated';
+/** `provider_removed` = Central One dejó de ofrecerlo; `provider_migrated` = era de FazerCards; `out_of_stock` = sin paquetes disponibles. */
+export type GameHiddenReason = 'provider_removed' | 'provider_migrated' | 'out_of_stock';
 
 export type PaymentMethod = 'pagomovil_bdv' | 'transfer' | 'binance_pay' | 'wallet';
 

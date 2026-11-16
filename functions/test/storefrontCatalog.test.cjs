@@ -300,3 +300,24 @@ test('toPublicProduct: muestra "X en stock" para LIMITADO y productos sin badge 
     'COMBO'
   );
 });
+
+test('catálogo storefront: oculta juegos con productCount === 0 y omite liveOfferIds en toPublicGame', async () => {
+  gamesStore.clear();
+  gamesStore.set(
+    'co-topup-mobile-legends-global',
+    game({ provider: 'centralone', providerFamily: 'topup', productCount: 104, liveOfferIds: ['o-1', 'o-2'] })
+  );
+  gamesStore.set(
+    'co-topup-gemini-pro-latam',
+    game({ provider: 'centralone', providerFamily: 'topup', productCount: 0, liveOfferIds: [] })
+  );
+
+  const list = await catalog.listStorefrontGamesByFamily('topup');
+  assert.deepEqual(list.map((g) => g.id), ['co-topup-mobile-legends-global']);
+
+  const searched = await catalog.searchStorefrontGamesByFamily('topup', 'gemini', { limit: 10 });
+  assert.deepEqual(searched.items, []);
+
+  const pub = catalog.toPublicGame(list[0]);
+  assert.equal('liveOfferIds' in pub, false);
+});

@@ -62,12 +62,12 @@ export const CENTRAL_ONE_SUPPORTED_GAMES: Record<string, SupportedGameConfig> = 
   'mobile-legends': {
     gameSlug: 'mobile-legends',
     name: 'Mobile Legends',
-    productId: 'e4f28fe6-7031-429a-9396-7df14ad7bc68',
-    targetFields: ['player_id', 'server_id'],
+    productId: '98f7e381-8697-4201-8cfb-ef8813225946',
+    targetFields: ['game_user_id', 'game_zone_id'],
     requiresServer: true,
     buildPayload: (playerId: string, serverId?: string | null) => ({
-      player_id: playerId.trim(),
-      server_id: (serverId ?? '').trim(),
+      game_user_id: playerId.trim(),
+      game_zone_id: (serverId ?? '').trim(),
     }),
   },
   'pubg-mobile': {
@@ -1559,8 +1559,8 @@ export interface LiveAvailabilityResult {
   stock: number | null;
 }
 
-const LIVE_CATALOG_CACHE_TTL_MS = 30_000;
-const LIVE_CATALOG_ERROR_COOLDOWN_MS = 10_000;
+const LIVE_CATALOG_CACHE_TTL_MS = 15_000;
+const LIVE_CATALOG_ERROR_COOLDOWN_MS = 5_000;
 
 let liveStockCache: {
   expiresAt: number;
@@ -1603,7 +1603,7 @@ export async function getLiveCatalogStockMap(): Promise<Map<string, LiveCatalogS
 
   liveStockCache.inFlight = (async () => {
     try {
-      const result = await getCatalog({ timeoutMs: 12_000, retries: 0 });
+      const result = await getCatalog({ timeoutMs: 18_000, retries: 1 });
       if (!result.ok) {
         log.warn('Central One live stock lookup failed', {
           code: result.code,
@@ -1651,15 +1651,101 @@ export async function getLiveCatalogStockMap(): Promise<Map<string, LiveCatalogS
  * Resuelve la disponibilidad real de un producto combinando el estado de
  * administración en Firestore con el stock vivo reportado por Central One.
  */
+function millisOfTimestampLike(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : null;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof value === 'object') {
+    const obj = value as { toMillis?: () => number; _seconds?: unknown; seconds?: unknown };
+    if (typeof obj.toMillis === 'function') {
+      const ms = obj.toMillis();
+      return Number.isFinite(ms) ? ms : null;
+    }
+    const secs = typeof obj._seconds === 'number' ? obj._seconds : typeof obj.seconds === 'number' ? obj.seconds : null;
+    if (secs !== null && Number.isFinite(secs)) return secs * 1000;
+  }
+  return null;
+}
+
+const PACKAGE_FAILURE_NON_STOCK_CODES = new Set([
+  'invalid_player',
+  'not_eligible',
+  'do_not_retry',
+  'invalid_request',
+  'insufficient_balance',
+  'network_error',
+  'timeout',
+  'ambiguous',
+  'missing_config',
+]);
+
+const PACKAGE_FAILURE_LINE_PATTERN =
+  /line\s+could\s+not\s+be\s+completed|l[ií]nea\s+no\s+se\s+pudo\s+completar|out\s*of\s*stock|insufficient\s*stock|product[_\s-]*unavailable|provider[_\s-]*unavailable|agotad[oa]/i;
+
+export function isCentralOnePackageUnavailableFailure(failure: {
+  code?: string | null;
+  action?: string | null;
+  message?: string | null;
+}): boolean {
+  const code = (failure.code ?? '').trim().toLowerCase();
+  const action = (failure.action ?? '').trim().toLowerCase();
+  if (PACKAGE_FAILURE_NON_STOCK_CODES.has(code) || action === 'do_not_retry') return false;
+  if (
+    code === 'out_of_stock' ||
+    code === 'insufficient_stock' ||
+    code === 'provider_unavailable' ||
+    code === 'product_unavailable'
+  ) {
+    return true;
+  }
+  return PACKAGE_FAILURE_LINE_PATTERN.test(failure.message ?? '');
+}
+
+export function dispatchPauseDurationMs(
+  failureCode: string | null | undefined,
+  consecutiveFailures = 1
+): number {
+  const code = (failureCode ?? '').trim().toLowerCase();
+  const baseMs =
+    code === 'out_of_stock' || code === 'insufficient_stock' ? 15 * 60_000 : 30 * 60_000;
+  const strikes = Math.max(1, Math.floor(consecutiveFailures));
+  if (strikes === 1) return baseMs;
+  if (strikes === 2) return baseMs * 2;
+  return 6 * 60 * 60_000;
+}
+
+export function isProductDispatchPaused(
+  product: Pick<Product, 'providerPausedUntil'>,
+  nowMs = Date.now()
+): boolean {
+  const untilMs = millisOfTimestampLike(product.providerPausedUntil);
+  return untilMs !== null && untilMs > nowMs;
+}
+
 export function resolveProductLiveAvailability(
   product: Pick<
     Product,
-    'active' | 'stock' | 'provider' | 'providerOfferId' | 'adminDisabled' | 'providerRemoved' | 'calls'
+    | 'active'
+    | 'stock'
+    | 'provider'
+    | 'providerOfferId'
+    | 'adminDisabled'
+    | 'providerRemoved'
+    | 'providerPausedUntil'
+    | 'calls'
   >,
-  stockMap: Map<string, LiveCatalogStockEntry> | null
+  stockMap: Map<string, LiveCatalogStockEntry> | null,
+  nowMs = Date.now()
 ): LiveAvailabilityResult {
   if (product.adminDisabled === true || product.providerRemoved === true) {
     return { checked: false, available: false, stock: product.stock };
+  }
+  if (isProductDispatchPaused(product, nowMs)) {
+    return { checked: true, available: false, stock: 0 };
   }
 
   const coCalls: Array<{ packageId: string; quantity: number }> = [];

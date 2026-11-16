@@ -36,7 +36,6 @@ import {
 } from '../config/env';
 import {
   db,
-  games,
   now,
   privateCentralOneConfigDoc,
   products,
@@ -47,6 +46,7 @@ import { asyncHandler } from '../lib/http';
 import { log } from '../lib/logger';
 import { applyMargin, round } from '../lib/money';
 import * as adminAlerts from '../services/adminAlerts';
+import * as catalog from '../services/catalog';
 import * as centralOne from '../services/centralOne';
 import {
   resolveCentralOneWebhookOrder,
@@ -346,7 +346,15 @@ export function stockFromChange(change: CoProductChange): number | null | undefi
 
 export type CoProductState = Pick<
   Product,
-  'costUsd' | 'priceUsd' | 'stock' | 'active' | 'providerRemoved' | 'adminDisabled' | 'priceLocked'
+  | 'costUsd'
+  | 'priceUsd'
+  | 'stock'
+  | 'active'
+  | 'providerRemoved'
+  | 'adminDisabled'
+  | 'priceLocked'
+  | 'providerPausedUntil'
+  | 'consecutiveDispatchFailures'
 >;
 
 /**
@@ -392,12 +400,18 @@ export function productPatchFromChange(
     if (product.active) patch.active = false;
   } else if (
     stock !== undefined &&
-    product.stock === 0 &&
-    !product.active &&
+    stock !== 0 &&
     product.adminDisabled !== true &&
     product.providerRemoved !== true
   ) {
-    patch.active = true;
+    if (product.stock === 0 && !product.active) {
+      patch.active = true;
+    }
+    if (product.providerPausedUntil || (product.consecutiveDispatchFailures ?? 0) > 0) {
+      patch.providerPausedUntil = null;
+      patch.providerPauseReason = null;
+      patch.consecutiveDispatchFailures = 0;
+    }
   }
 
   return { patch, lossGuard };
@@ -522,24 +536,8 @@ function isSyncedCentralOneProduct(id: string, data: FirebaseFirestore.DocumentD
  * siguiente sync.
  */
 async function refreshGameSummaries(gameIds: string[]): Promise<void> {
-  for (const gameId of gameIds) {
-    const snap = await products().where('gameId', '==', gameId).get();
-    const prices = snap.docs
-      .map((doc) => doc.data())
-      .filter((data) => data.active === true)
-      .map((data) => Number(data.priceUsd))
-      .filter((price) => Number.isFinite(price) && price > 0);
-    await games()
-      .doc(gameId)
-      .set(
-        {
-          productCount: prices.length,
-          minPriceUsd: prices.length ? round(Math.min(...prices), 2) : null,
-          updatedAt: now(),
-        },
-        { merge: true }
-      );
-  }
+  const { refreshCentralOneGameSummaries } = await import('../services/catalog');
+  await refreshCentralOneGameSummaries(gameIds);
 }
 
 /** Avisa (como mucho una vez por hora y extra) de los extras de Free Fire afectados. */
@@ -641,6 +639,9 @@ async function applyProductChanges(changes: CoProductChange[], occurredAt: strin
           providerRemoved: data.providerRemoved === true,
           adminDisabled: data.adminDisabled === true,
           priceLocked: data.priceLocked === true,
+          providerPausedUntil: (data.providerPausedUntil as Product['providerPausedUntil']) ?? null,
+          consecutiveDispatchFailures:
+            typeof data.consecutiveDispatchFailures === 'number' ? data.consecutiveDispatchFailures : 0,
         },
         change,
         freshPrice
@@ -683,7 +684,10 @@ async function applyProductChanges(changes: CoProductChange[], occurredAt: strin
   }
   if (pending > 0) await batch.commit();
 
-  if (updated > 0) centralOne.invalidateLiveCatalogStockCache();
+  if (updated > 0) {
+    centralOne.invalidateLiveCatalogStockCache();
+    catalog.invalidateCatalogCache();
+  }
   if (touchedGames.size > 0) await refreshGameSummaries([...touchedGames]);
   await alertExtraProblems(extraProblems);
   if (stale > 0) log.info('Webhook de Central One: avisos de producto atrasados ignorados', { stale, occurredAt });

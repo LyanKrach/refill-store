@@ -13,6 +13,7 @@
  *  - Los productos manuales (Categoría B) no tocan el API del proveedor: se
  *    genera el enlace de WhatsApp y la orden queda esperando gestión humana.
  */
+import { Timestamp } from 'firebase-admin/firestore';
 import { db, orders, games, products, now, minutesFromNow, providerOrders } from '../config/firebase';
 import { createHash } from 'node:crypto';
 import { log, stripCodes } from '../lib/logger';
@@ -30,7 +31,11 @@ import * as creatorsService from './creators';
 import { addEvent } from './orderEvents';
 import { getConfig } from './settings';
 import { sendOrderEmail } from './orderEmails';
-import { resolvePlayerFields, incrementGameSales } from './catalog';
+import {
+  resolvePlayerFields,
+  incrementGameSales,
+  refreshCentralOneGameSummaries,
+} from './catalog';
 import { describeOrder } from '../lib/orderItem';
 import { buildManualOrderUrl, buildWhatsappUrl } from './whatsapp';
 import type {
@@ -1044,6 +1049,9 @@ export async function dispatchOrder(
         call.status = 'success';
         call.error = null;
         call.completedAt = now();
+        if (callProvider === 'centralone') {
+          await clearProductsDispatchPauseOnSuccess(order, call.packageId);
+        }
 
         await addEvent({
           orderId,
@@ -1083,6 +1091,14 @@ export async function dispatchOrder(
         call.status = 'error';
         call.error = cleanMsg;
         failure = cleanMsg;
+        if (callProvider === 'centralone') {
+          const outcome = result as CentralOneCallOutcome;
+          await pauseProductsForCentralOneFailure(order, call.packageId, {
+            code: outcome.failureCode,
+            action: outcome.failureAction,
+            message: result.message,
+          });
+        }
 
         await addEvent({
           orderId,
@@ -1156,7 +1172,138 @@ interface CentralOneCallOutcome {
   raw: Record<string, unknown>;
   httpStatus: number | null;
   message?: string;
+  failureCode?: string | null;
+  failureAction?: string | null;
   codes?: string[];
+}
+
+async function collectAffectedCentralOneProducts(order: Order, rawPackageId: string | number) {
+  const packageId = String(rawPackageId);
+  const seen = new Map<string, Record<string, unknown>>();
+  const queries: Array<Promise<void>> = [];
+
+  if (order.productId) {
+    queries.push(
+      products()
+        .doc(order.productId)
+        .get()
+        .then((snap) => {
+          if (snap.exists) seen.set(snap.id, snap.data() as Record<string, unknown>);
+        })
+    );
+  }
+  if (packageId) {
+    queries.push(
+      products()
+        .where('providerOfferId', '==', packageId)
+        .get()
+        .then((snap) => {
+          for (const doc of snap.docs) seen.set(doc.id, doc.data() as Record<string, unknown>);
+        })
+    );
+  }
+  if (order.gameId) {
+    queries.push(
+      products()
+        .where('gameId', '==', order.gameId)
+        .get()
+        .then((snap) => {
+          for (const doc of snap.docs) {
+            const data = doc.data() as Record<string, unknown>;
+            const calls = Array.isArray(data.calls) ? data.calls : [];
+            if (calls.some((c) => String((c as { packageId?: unknown }).packageId ?? '') === packageId)) {
+              seen.set(doc.id, data);
+            }
+          }
+        })
+    );
+  }
+  await Promise.all(queries);
+  return seen;
+}
+
+/**
+ * Si Central One falla el despacho por falta de stock o línea caída, pausa
+ * automáticamente los productos afectados para ocultarlos de inmediato en la tienda.
+ */
+async function pauseProductsForCentralOneFailure(
+  order: Order,
+  rawPackageId: string | number,
+  failure: { code?: string | null; action?: string | null; message?: string | null }
+): Promise<void> {
+  const packageId = String(rawPackageId);
+  if (!centralOne.isCentralOnePackageUnavailableFailure(failure)) return;
+  try {
+    const affected = await collectAffectedCentralOneProducts(order, packageId);
+    if (affected.size === 0) return;
+
+    const touchedGames = new Set<string>();
+    const ts = now();
+    const nowMs = Date.now();
+
+    for (const [docId, data] of affected) {
+      if (data.adminDisabled === true || data.providerRemoved === true) continue;
+      const strikes = (typeof data.consecutiveDispatchFailures === 'number' ? data.consecutiveDispatchFailures : 0) + 1;
+      const pauseMs = centralOne.dispatchPauseDurationMs(failure.code, strikes);
+      await products().doc(docId).set(
+        {
+          active: false,
+          stock: 0,
+          providerPausedUntil: Timestamp.fromMillis(nowMs + pauseMs),
+          providerPauseReason: failure.code || 'line_failed',
+          consecutiveDispatchFailures: strikes,
+          updatedAt: ts,
+        },
+        { merge: true }
+      );
+      if (typeof data.gameId === 'string' && data.gameId) touchedGames.add(data.gameId);
+    }
+
+    if (touchedGames.size > 0) {
+      await refreshCentralOneGameSummaries([...touchedGames]);
+    }
+    centralOne.invalidateLiveCatalogStockCache();
+    log.warn('Paquete de Central One pausado automáticamente por fallo en despacho', {
+      orderCode: order.code,
+      packageId,
+      failureCode: failure.code ?? null,
+      affectedIds: [...affected.keys()],
+    });
+  } catch (err) {
+    log.warn('No se pudo auto-pausar producto de Central One tras fallo', {
+      orderCode: order.code,
+      packageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function clearProductsDispatchPauseOnSuccess(order: Order, rawPackageId: string | number): Promise<void> {
+  const packageId = String(rawPackageId);
+  try {
+    const affected = await collectAffectedCentralOneProducts(order, packageId);
+    for (const [docId, data] of affected) {
+      const hasCounters =
+        (typeof data.consecutiveDispatchFailures === 'number' && data.consecutiveDispatchFailures > 0) ||
+        Boolean(data.providerPausedUntil);
+      if (!hasCounters) continue;
+      await products().doc(docId).set(
+        {
+          consecutiveDispatchFailures: 0,
+          providerPausedUntil: null,
+          providerPauseReason: null,
+          updatedAt: now(),
+        },
+        { merge: true }
+      );
+    }
+  } catch (err) {
+    log.warn('No se pudo limpiar contador de fallos de Central One tras éxito', {
+      orderCode: order.code,
+      packageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
@@ -1348,6 +1495,8 @@ async function dispatchCentralOneCall(
       raw: createResult.raw,
       httpStatus: createResult.httpStatus,
       message: failureMsg,
+      failureCode: createResult.failureCode ?? null,
+      failureAction: createResult.failureAction ?? null,
     };
   }
 
@@ -1433,6 +1582,8 @@ async function dispatchCentralOneCall(
         message:
           orderDetail.failureMessage ||
           'Falló la entrega del producto en Central One.',
+        failureCode: orderDetail.failureCode ?? null,
+        failureAction: orderDetail.failureAction ?? null,
       };
     }
 
@@ -2418,6 +2569,7 @@ async function resolveCentralOneCall(order: Order, call: DispatchCallResult): Pr
     call.providerResponse = detail.raw;
     state.errorCode = null;
     state.pendingReason = null;
+    await clearProductsDispatchPauseOnSuccess(order, call.packageId);
     return true;
   }
 
@@ -2431,6 +2583,11 @@ async function resolveCentralOneCall(order: Order, call: DispatchCallResult): Pr
     state.keyClosed = true;
     state.errorCode = detail.failureCode ?? 'failed';
     state.pendingReason = null;
+    await pauseProductsForCentralOneFailure(order, call.packageId, {
+      code: detail.failureCode,
+      action: detail.failureAction,
+      message: detail.failureMessage,
+    });
     return true;
   }
 
@@ -2483,6 +2640,7 @@ async function retryCentralOneCall(order: Order, state: CentralOneCallState): Pr
     state.status = 'success';
     state.error = null;
     state.completedAt = now();
+    await clearProductsDispatchPauseOnSuccess(order, state.packageId);
     try {
       await adminAlerts.checkCentralOneBalance({
         availableUsd: result.remainingBalance ?? null,
@@ -2498,6 +2656,11 @@ async function retryCentralOneCall(order: Order, state: CentralOneCallState): Pr
   } else {
     state.status = 'error';
     state.error = sanitizeProviderError(result.message, result.httpStatus);
+    await pauseProductsForCentralOneFailure(order, state.packageId, {
+      code: result.failureCode ?? state.errorCode,
+      action: result.failureAction,
+      message: result.message,
+    });
   }
 
   await addEvent({
@@ -3010,6 +3173,11 @@ export async function checkOrderProviderStatus(
             call.providerOrderId = pOrderId;
             call.providerStatus = coResult.lineStatus || coResult.orderStatus;
             callChanged = true;
+            await pauseProductsForCentralOneFailure(order, call.packageId, {
+              code: coResult.failureCode,
+              action: coResult.failureAction,
+              message: coResult.failureMessage,
+            });
           }
           // Confirmado cerrado sin entregar. No marca `callChanged` a propósito:
           // eso volvería a cerrar la orden y repetir el aviso; el reintento lo

@@ -1266,9 +1266,19 @@ export function centralOneAdminDecisions(
     decisions.adminDisabled = body.adminDisabled;
     // Encender no fuerza la venta: queda activa sólo si el proveedor la tiene.
     decisions.active = body.adminDisabled ? false : providerAvailable;
+    if (!body.adminDisabled) {
+      decisions.providerPausedUntil = null;
+      decisions.providerPauseReason = null;
+      decisions.consecutiveDispatchFailures = 0;
+    }
   } else if (body.active !== undefined && body.active !== current.active) {
     decisions.adminDisabled = !body.active;
-    if (body.active) decisions.active = providerAvailable;
+    if (body.active) {
+      decisions.active = providerAvailable;
+      decisions.providerPausedUntil = null;
+      decisions.providerPauseReason = null;
+      decisions.consecutiveDispatchFailures = 0;
+    }
   }
 
   const priceChanged = body.priceUsd !== undefined && round(body.priceUsd, 2) !== round(current.priceUsd, 2);

@@ -66,6 +66,7 @@ function isCatalogProvider(provider: Provider | undefined): boolean {
 const HIDDEN_REASON_LABEL: Record<NonNullable<Game['hiddenReason']>, string> = {
   provider_removed: 'Central One ya no lo vende',
   provider_migrated: 'Migrado a Central One',
+  out_of_stock: 'Sin paquetes disponibles',
 };
 
 /** Plantillas para no tener que escribir a mano los campos más habituales. */

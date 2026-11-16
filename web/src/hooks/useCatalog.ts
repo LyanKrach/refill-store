@@ -14,8 +14,9 @@ import type { CatalogResponse, GameCatalogResponse, ProductResponse, PublicProdu
  * el cambio no se había guardado.
  */
 const CATALOG_OPTIONS = {
-  staleTime: 30_000,
+  staleTime: 10_000,
   refetchOnWindowFocus: true,
+  refetchInterval: 30_000,
 } as const;
 
 export function useCatalog() {

@@ -2,7 +2,11 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveProductLiveAvailability } = require('../lib/services/centralOne');
+const {
+  resolveProductLiveAvailability,
+  isCentralOnePackageUnavailableFailure,
+  dispatchPauseDurationMs,
+} = require('../lib/services/centralOne');
 
 test('resolveProductLiveAvailability: oculta stock 0 y muestra disponibles con stock vivo', () => {
   const base = {
@@ -144,4 +148,62 @@ test('resolveProductLiveAvailability: combos respetan cantidad y stock minimo de
     stockMap
   );
   assert.deepEqual(comboZeroSubcall, { checked: true, available: false, stock: 0 });
+});
+
+test('resolveProductLiveAvailability: pausa temporal tras fallo de despacho y recupera al vencer', () => {
+  const nowMs = 1_800_000_000_000;
+  const stockMap = new Map([
+    ['ml-112', { inStock: true, availableStock: null, active: true }],
+  ]);
+  const paused = {
+    active: false,
+    stock: 0,
+    provider: 'centralone',
+    providerOfferId: 'ml-112',
+    adminDisabled: false,
+    providerRemoved: false,
+    providerPausedUntil: nowMs + 10 * 60_000,
+    calls: [{ packageId: 'ml-112', quantity: 1, provider: 'centralone' }],
+  };
+
+  assert.deepEqual(resolveProductLiveAvailability(paused, stockMap, nowMs), {
+    checked: true,
+    available: false,
+    stock: 0,
+  });
+  assert.deepEqual(resolveProductLiveAvailability(paused, null, nowMs), {
+    checked: true,
+    available: false,
+    stock: 0,
+  });
+
+  // Al vencer el enfriamiento y seguir inStock en Central One, vuelve automáticamente.
+  assert.deepEqual(
+    resolveProductLiveAvailability(paused, stockMap, nowMs + 11 * 60_000),
+    { checked: true, available: true, stock: null }
+  );
+});
+
+test('isCentralOnePackageUnavailableFailure & backoff: separa fallos de línea/stock de errores de jugador', () => {
+  assert.equal(isCentralOnePackageUnavailableFailure({ code: 'out_of_stock' }), true);
+  assert.equal(isCentralOnePackageUnavailableFailure({ code: 'insufficient_stock' }), true);
+  assert.equal(isCentralOnePackageUnavailableFailure({ code: 'provider_unavailable' }), true);
+  assert.equal(
+    isCentralOnePackageUnavailableFailure({
+      code: 'unknown',
+      action: 'contact_support',
+      message: 'La línea no se pudo completar.',
+    }),
+    true
+  );
+
+  assert.equal(isCentralOnePackageUnavailableFailure({ code: 'invalid_player' }), false);
+  assert.equal(isCentralOnePackageUnavailableFailure({ code: 'not_eligible', action: 'do_not_retry' }), false);
+  assert.equal(isCentralOnePackageUnavailableFailure({ code: 'insufficient_balance' }), false);
+  assert.equal(isCentralOnePackageUnavailableFailure({ code: 'network_error' }), false);
+
+  assert.equal(dispatchPauseDurationMs('out_of_stock', 1), 15 * 60_000);
+  assert.equal(dispatchPauseDurationMs('unknown', 1), 30 * 60_000);
+  assert.equal(dispatchPauseDurationMs('unknown', 2), 60 * 60_000);
+  assert.equal(dispatchPauseDurationMs('unknown', 3), 6 * 60 * 60_000);
 });

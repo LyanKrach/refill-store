@@ -10,6 +10,7 @@ import { answerKnownSupportQuestion, type SupportAnswer } from './chatbotAnswers
 import { buildSupportSystemInstruction, parseSupportAnswer } from './chatbotPrompt';
 import { getConfig, invalidateConfigCache } from './settings';
 import * as catalog from './catalog';
+import * as centralOne from './centralOne';
 import { buildSupportUrl } from './whatsapp';
 
 export interface AdminChatbotConfig {
@@ -178,23 +179,34 @@ export async function answerSupportQuestion(
     .filter((message) => message.role === 'user')
     .map((message) => message.content)
     .join(' ');
-  const relevantGames = matchingGames(questionContext, allGames)
-    .filter((game) => belongsToStorefront(game, storefront));
+  const visibleActiveGames = allGames.filter(
+    (game) => belongsToStorefront(game, storefront) && (game.productCount ?? 1) > 0
+  );
+  const relevantGames = matchingGames(questionContext, visibleActiveGames);
   const productsForGames = await Promise.all(
     relevantGames.map(async (game) => ({
       game,
-      products: await catalog.listProducts({ gameId: game.id, onlyActive: true }),
+      products: await catalog.listProducts({ gameId: game.id }),
     }))
   );
+  const allProductsFlat = productsForGames.flatMap((entry) => entry.products);
+  const stockMap = allProductsFlat.some(centralOne.productUsesCentralOne)
+    ? await centralOne.getLiveCatalogStockMap()
+    : null;
   const currentProducts = productsForGames.flatMap(({ game, products }) =>
     products
-      .filter((product) => product.stock !== 0)
+      .map((product) => {
+        const status = centralOne.resolveProductLiveAvailability(product, stockMap);
+        if (!status.available) return null;
+        return status.checked ? { ...product, active: true, stock: status.stock } : product;
+      })
+      .filter((product): product is Product => product !== null)
       .slice(0, 30)
       .map((product) => summarizeProduct(product, game, config.rate.value, config.pricing.roundToBs))
   );
-  const visibleGames = allGames
-    .filter((game) => belongsToStorefront(game, storefront))
-    .map((game) => `${game.name}${game.providerFamily ? ` (${game.providerFamily})` : ''}`);
+  const visibleGames = visibleActiveGames.map(
+    (game) => `${game.name}${game.providerFamily ? ` (${game.providerFamily})` : ''}`
+  );
   const payment = paymentContext(config);
   const privateInstructions = privateSnapshot.data()?.supportBot as { instructions?: unknown } | undefined;
   const systemInstruction = buildSupportSystemInstruction({

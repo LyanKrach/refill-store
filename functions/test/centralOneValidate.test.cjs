@@ -271,7 +271,7 @@ test('Central One - Validación de ID de Jugador y Caché Inteligente', async (t
   );
 
   await t.test(
-    '5. Mobile Legends mapea correctamente player_id y server_id hacia Central One',
+    '5. Mobile Legends mapea correctamente game_user_id y game_zone_id hacia Central One (GLOBAL)',
     async () => {
       fetchCalls.length = 0;
       fetchMockHandler = async () => ({
@@ -280,7 +280,7 @@ test('Central One - Validación de ID de Jugador y Caché Inteligente', async (t
         json: async () => ({
           success: true,
           status: 'valid',
-          product_id: 'e4f28fe6-7031-429a-9396-7df14ad7bc68',
+          product_id: '98f7e381-8697-4201-8cfb-ef8813225946',
           player: { name: 'MGLegendPro' },
         }),
       });
@@ -295,10 +295,10 @@ test('Central One - Validación de ID de Jugador y Caché Inteligente', async (t
       assert.equal(res.playerName, 'MGLegendPro');
       assert.equal(fetchCalls.length, 1);
       assert.deepEqual(fetchCalls[0].body.target_payload, {
-        player_id: '12345678',
-        server_id: '2345',
+        game_user_id: '12345678',
+        game_zone_id: '2345',
       });
-      assert.equal(fetchCalls[0].body.product_id, 'e4f28fe6-7031-429a-9396-7df14ad7bc68');
+      assert.equal(fetchCalls[0].body.product_id, '98f7e381-8697-4201-8cfb-ef8813225946');
     }
   );
 });

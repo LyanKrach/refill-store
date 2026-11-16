@@ -230,6 +230,7 @@ export function CheckoutPage() {
   useEffect(() => {
     if (autoCreated.current || resumeOrderId) return;
     if ((requiresPlayerData && !hasPlayerData) || !user || !product || !game) return;
+    if (!game.active || !product.active || (product.stock !== null && product.stock <= 0)) return;
     if (step !== 'player' || orderData || createOrder.isPending) return;
 
     autoCreated.current = true;
@@ -250,14 +251,22 @@ export function CheckoutPage() {
     return <FullPageLoader label="Cargando tu orden…" />;
   }
 
-  if (notFound || !product || !game) {
+  const productUnavailable =
+    notFound ||
+    !product ||
+    !game ||
+    !game.active ||
+    !product.active ||
+    (product.stock !== null && product.stock <= 0);
+
+  if (productUnavailable) {
     return (
       <div className="mx-auto max-w-lg px-4 py-16">
         <ErrorState
           title="Producto no disponible"
-          message="Este paquete ya no existe o fue desactivado."
+          message="Este paquete ya no existe, se agotó o fue desactivado."
           action={
-            <ButtonLink to={ROUTES.home} variant="secondary">
+            <ButtonLink to={game && game.active ? ROUTES.game(game.id) : ROUTES.home} variant="secondary">
               Ver catálogo
             </ButtonLink>
           }

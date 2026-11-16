@@ -76,7 +76,12 @@ const HOME_PRIORITY: Partial<Record<FazerFamily, string[]>> = {
 
 /** Juego del catálogo sincronizado, visible y de la familia pedida. */
 function isListedStorefrontGame(game: Game, family: FazerFamily): boolean {
-  return game.active && isStorefrontProvider(game.provider) && game.providerFamily === family;
+  return (
+    game.active &&
+    (game.productCount ?? 1) > 0 &&
+    isStorefrontProvider(game.provider) &&
+    game.providerFamily === family
+  );
 }
 
 /**
@@ -145,9 +150,12 @@ export async function listStorefrontGamesByFamily(
     .where('active', '==', true)
     .orderBy('sortOrder', 'asc')
     .orderBy(FieldPath.documentId(), 'asc');
-  if (limit !== undefined) query = query.limit(limit);
+  if (limit !== undefined) query = query.limit(limit * 3);
   const snap = await query.get();
-  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Game);
+  const visible = snap.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }) as Game)
+    .filter((game) => (game.productCount ?? 1) > 0);
+  return limit !== undefined ? visible.slice(0, limit) : visible;
 }
 
 /** Portada: mantiene las categorías principales visibles sin leer la familia completa. */
@@ -161,7 +169,7 @@ export async function listStorefrontHomeGamesByFamily(family: FazerFamily, limit
       const accepted = id === INEFABLE_FREE_FIRE_ID || id === 'freefire-id' || (game.manual && game.provider === 'inefable')
         ? family === 'topup' && (game.provider ?? 'inefable') === 'inefable'
         : isStorefrontProvider(game.provider) && game.providerFamily === family;
-      return game.active && accepted ? game : null;
+      return game.active && (game.productCount ?? 1) > 0 && accepted ? game : null;
     }),
   ]);
   const unique = new Map([...firstPage, ...pinned.filter((game): game is Game => Boolean(game))].map((game) => [game.id, game]));
@@ -229,7 +237,10 @@ export async function pageStorefrontGamesByFamily(
     { orderBy: 'sortOrder', direction: 'asc', cursor: options.cursor, limit: options.limit, withTotal: !options.cursor },
     (id, data) => ({ id, ...data }) as Game
   );
-  return page;
+  return {
+    ...page,
+    items: page.items.filter((game) => (game.productCount ?? 1) > 0),
+  };
 }
 
 // Nombres anteriores, cuando el catálogo .com era sólo FazerCards. Se conservan
@@ -404,28 +415,30 @@ export function knownCurrencyFor(game: Pick<Game, 'id' | 'name' | 'provider' | '
 }
 
 export function toPublicGame(game: Game): Game {
-  const known = knownCurrencyFor(game);
-  const currentIconUrl = game.currencyIconUrl?.trim() ?? '';
-  const expiredCanvaIcon = game.id === INEFABLE_FREE_FIRE_ID && currentIconUrl.includes('media.canva.com');
-  const regionInfo = resolveRegionInfo(game.region, game.name, game.shortName);
+  const { liveOfferIds: _liveOfferIds, ...publicGame } = game;
+  void _liveOfferIds;
+  const known = knownCurrencyFor(publicGame);
+  const currentIconUrl = publicGame.currencyIconUrl?.trim() ?? '';
+  const expiredCanvaIcon = publicGame.id === INEFABLE_FREE_FIRE_ID && currentIconUrl.includes('media.canva.com');
+  const regionInfo = resolveRegionInfo(publicGame.region, publicGame.name, publicGame.shortName);
 
   return {
-    ...game,
-    regionCode: game.regionCode || regionInfo.regionCode,
-    regionLabel: game.regionLabel || regionInfo.regionLabel,
-    regionBadge: game.regionBadge || regionInfo.regionBadge,
-    isRegionRestricted: typeof game.isRegionRestricted === 'boolean' ? game.isRegionRestricted : regionInfo.isRegionRestricted,
-    regionWarning: game.regionWarning || regionInfo.regionWarning,
-    playerFields: resolvePlayerFields(game),
+    ...publicGame,
+    regionCode: publicGame.regionCode || regionInfo.regionCode,
+    regionLabel: publicGame.regionLabel || regionInfo.regionLabel,
+    regionBadge: publicGame.regionBadge || regionInfo.regionBadge,
+    isRegionRestricted: typeof publicGame.isRegionRestricted === 'boolean' ? publicGame.isRegionRestricted : regionInfo.isRegionRestricted,
+    regionWarning: publicGame.regionWarning || regionInfo.regionWarning,
+    playerFields: resolvePlayerFields(publicGame),
     // «Recargas» es la etiqueta genérica de las sincronizaciones; un juego de
     // Central One recién creado puede llegar además sin etiqueta. Lo que el
     // admin escriba a mano siempre manda.
     currencyLabel:
-      known && (game.currencyLabel === 'Recargas' || (game.provider === 'centralone' && !game.currencyLabel?.trim()))
+      known && (publicGame.currencyLabel === 'Recargas' || (publicGame.provider === 'centralone' && !publicGame.currencyLabel?.trim()))
         ? known.label
-        : game.currencyLabel,
+        : publicGame.currencyLabel,
     currencyIconUrl: expiredCanvaIcon ? known?.iconUrl ?? '' : currentIconUrl || known?.iconUrl || '',
-    validatesPlayerId: game.validatesPlayerId ?? false,
+    validatesPlayerId: publicGame.validatesPlayerId ?? false,
   };
 }
 
@@ -808,6 +821,72 @@ export async function refreshManualGameSummary(gameId: string): Promise<void> {
     },
     { merge: true }
   );
+}
+
+/**
+ * Recalcula `productCount`, `minPriceUsd`, `liveOfferIds` y la visibilidad
+ * automática de los juegos de Central One tras cambios por webhook o fallos de despacho.
+ */
+export async function refreshCentralOneGameSummaries(gameIds: string[]): Promise<void> {
+  const { isProductDispatchPaused } = await import('./centralOne');
+  const uniqueIds = [...new Set(gameIds.map((id) => id.trim()).filter(Boolean))];
+  for (const gameId of uniqueIds) {
+    const gameRef = games().doc(gameId);
+    const [gameSnap, prodSnap] = await Promise.all([
+      gameRef.get(),
+      products().where('gameId', '==', gameId).get(),
+    ]);
+    if (!gameSnap.exists) continue;
+    const gameData = gameSnap.data() as Partial<Game> | undefined;
+    if (gameData?.manual === true) continue;
+    const isCentralOneGame = gameData?.provider === 'centralone' || gameId.startsWith('co-');
+
+    const nowMs = Date.now();
+    const available: Product[] = [];
+    const liveOfferIds = new Set<string>();
+    for (const doc of prodSnap.docs) {
+      const p = doc.data() as Product;
+      if (
+        p.active === true &&
+        p.adminDisabled !== true &&
+        p.providerRemoved !== true &&
+        !isProductDispatchPaused(p, nowMs) &&
+        (p.stock === null || p.stock > 0)
+      ) {
+        available.push(p);
+        for (const call of p.calls ?? []) {
+          if ((call.provider ?? p.provider) === 'centralone' && call.packageId) {
+            liveOfferIds.add(String(call.packageId));
+          }
+        }
+        if (p.providerOfferId) liveOfferIds.add(String(p.providerOfferId));
+      }
+    }
+
+    const prices = available
+      .map((item) => Number(item.priceUsd))
+      .filter((price) => Number.isFinite(price) && price > 0);
+    const patch: Record<string, unknown> = {
+      productCount: available.length,
+      minPriceUsd: prices.length ? round(Math.min(...prices), 2) : null,
+      liveOfferIds: [...liveOfferIds],
+      updatedAt: now(),
+    };
+    if (isCentralOneGame) {
+      if (available.length === 0) {
+        if (gameData?.active !== false) {
+          patch.active = false;
+          patch.hiddenReason = 'out_of_stock';
+        }
+      } else if (gameData?.active === false && gameData?.hiddenReason === 'out_of_stock') {
+        patch.active = true;
+        patch.hiddenReason = null;
+      }
+    }
+
+    await gameRef.set(patch, { merge: true });
+  }
+  invalidateCatalogCache();
 }
 
 /** Descuenta stock tras una venta. Ignora los productos de stock ilimitado. */

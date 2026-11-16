@@ -361,10 +361,12 @@ test('centralOneOfferLabel quita el nombre del juego', () => {
   assert.equal(sync.centralOneOfferLabel('1 USD · USDT', 'Binance'), '1 USD · USDT');
 });
 
-test('visibleInLatam: LATAM/GLOBAL/países visibles, US sólo en gift cards', () => {
+test('visibleInLatam: LATAM/GLOBAL/países visibles, US sólo en gift cards y SG bloqueado', () => {
   assert.equal(sync.visibleInLatam('topup', 'Free Fire', null, 'LATAM'), true);
   assert.equal(sync.visibleInLatam('topup', 'Free Fire', null, 'BR'), true);
   assert.equal(sync.visibleInLatam('topup', 'PUBG Mobile', null, 'GLOBAL'), true);
+  assert.equal(sync.visibleInLatam('topup', 'Mobile Legends (GLOBAL)', null, 'GLOBAL'), true);
+  assert.equal(sync.visibleInLatam('topup', 'Mobile Legends (SG)', null, 'SG'), false);
   assert.equal(sync.visibleInLatam('topup', 'PUBG Mobile', null, 'US'), false);
   assert.equal(sync.visibleInLatam('gift_card', 'Google Play', null, 'US'), true);
   assert.equal(sync.visibleInLatam('gift_card', 'Steam Wallet', null, 'EU'), false);
@@ -1089,4 +1091,32 @@ test('Free Fire LATAM Pase Booyah: mapea el estándar como Pase Booyah y los 2 l
   assert.equal(outById.get('93b813f6-829f-474c-b496-f1172a1e92b7').badge, 'LIMITADO');
   assert.equal(outById.get('e645430f-b142-46b4-885f-37a11cd2f236').providerAvailable, true);
   assert.equal(outById.get('7eed3f72-b3fb-45e6-b8e5-9503e4aafcfa').providerAvailable, true);
+});
+
+test('newCentralOneGameDoc: si todas las ofertas llegan sin stock nace oculto por out_of_stock', () => {
+  const mapping = sync.mapCentralOneCatalog([
+    item({
+      product_id: 'ml-out-1',
+      name: 'Mobile Legends · 112 Diamantes',
+      product_family_id: 'mobile-legends',
+      product_family_name: 'Mobile Legends',
+      region: 'GLOBAL',
+      in_stock: false,
+      available_stock: 0,
+    }),
+    item({
+      product_id: 'ml-sg-1',
+      name: 'Mobile Legends (SG) · 55 Diamantes',
+      product_family_id: 'mobile-legends',
+      product_family_name: 'Mobile Legends',
+      region: 'SG',
+      in_stock: true,
+    }),
+  ]);
+  assert.equal(mapping.games.length, 1, 'Singapur queda fuera del mapeo');
+  const ml = mapping.games[0];
+  assert.equal(ml.id, 'co-topup-mobile-legends-global');
+  const doc = sync.newCentralOneGameDoc(ml, { productCount: 0 }, null, Timestamp.now());
+  assert.equal(doc.active, false);
+  assert.equal(doc.hiddenReason, 'out_of_stock');
 });
