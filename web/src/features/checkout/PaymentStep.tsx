@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Clock, Coins, Landmark, Receipt, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Field';
 import { CopyField } from '@/components/common/CopyField';
+import { PaymentProofUploader } from '@/features/checkout/PaymentProofUploader';
 import { useCountdown } from '@/hooks/useMisc';
 import { ROUTES } from '@/lib/constants';
 import { formatBs, formatUsd, formatRefillCoins } from '@/lib/format';
 import { onlyDigits, cn } from '@/lib/utils';
-import type { CreateOrderResponse } from '@/types/models';
+import type { CreateOrderResponse, PaymentProofExtraction } from '@/types/models';
 
 interface PaymentStepProps {
   data: CreateOrderResponse;
@@ -56,6 +57,9 @@ export function PaymentStep({
   attemptsLeft,
 }: PaymentStepProps) {
   const [reference, setReference] = useState('');
+  const [detectedAmount, setDetectedAmount] = useState('');
+  const [detectedBank, setDetectedBank] = useState('');
+  const [hasProofDetails, setHasProofDetails] = useState(false);
   const [touched, setTouched] = useState(false);
   const [useCoins, setUseCoins] = useState(false);
   const { display: timeLeft, expired } = useCountdown(data.payment.expiresAt);
@@ -75,6 +79,48 @@ export function PaymentStep({
 
   const isTransfer = method === 'transfer';
   const isBinancePay = method === 'binance_pay';
+  const supportsProofUpload = !isBinancePay;
+
+  useEffect(() => {
+    setReference('');
+    setDetectedAmount('');
+    setDetectedBank('');
+    setHasProofDetails(false);
+    setTouched(false);
+  }, [data.order.id]);
+
+  useEffect(() => {
+    if (isBinancePay) {
+      setDetectedAmount('');
+      setDetectedBank('');
+      setHasProofDetails(false);
+    }
+  }, [isBinancePay]);
+
+  const parsedDetectedAmount = Number.parseFloat(detectedAmount);
+  const amountMismatch =
+    supportsProofUpload &&
+    hasProofDetails &&
+    Number.isFinite(parsedDetectedAmount) &&
+    parsedDetectedAmount > 0 &&
+    Math.abs(parsedDetectedAmount - amountBs) > 0.5;
+
+  const handleProofExtracted = (result: PaymentProofExtraction) => {
+    const cleanRef = onlyDigits(result.reference).slice(0, referenceMaxLength);
+    if (result.success && cleanRef) {
+      setReference(cleanRef);
+      setTouched(true);
+    }
+    setDetectedAmount(result.amount);
+    setDetectedBank(result.bank);
+    setHasProofDetails(Boolean(result.amount || result.bank));
+  };
+
+  const handleProofClear = () => {
+    setDetectedAmount('');
+    setDetectedBank('');
+    setHasProofDetails(false);
+  };
   // Ya abonó algo y falta la diferencia: hay que decírselo con todas las
   // letras, o va a transferir el total otra vez.
   const hayParcial = (paidBs ?? 0) > 0;
@@ -317,12 +363,25 @@ export function PaymentStep({
           <div>
             <h3 className="text-sm font-semibold text-white">Confirma tu pago</h3>
             <p className="text-xs text-slate-400">
-              {isBinancePay ? 'Pega el código o referencia de la operación de Binance Pay' : 'Pega el número de referencia que te dio el banco'}
+              {isBinancePay
+                ? 'Pega el código o referencia de la operación de Binance Pay'
+                : 'Sube la captura para autocompletar o pega la referencia bancaria'}
             </p>
           </div>
         </div>
 
+        {supportsProofUpload && (
+          <PaymentProofUploader
+            key={data.order.id}
+            orderId={data.order.id}
+            disabled={expired || verifying}
+            onExtracted={handleProofExtracted}
+            onClear={handleProofClear}
+          />
+        )}
+
         <Input
+          label={supportsProofUpload ? 'Número de referencia' : undefined}
           inputMode={isBinancePay ? 'text' : 'numeric'}
           autoComplete="off"
           placeholder={isBinancePay ? 'Código de la operación' : 'Ej: 12345678'}
@@ -339,6 +398,36 @@ export function PaymentStep({
           }
           hint={isBinancePay ? 'Escribe el código tal como aparece en el comprobante de Binance Pay.' : 'Sólo números. Si tu referencia tiene letras o guiones, escribe únicamente los dígitos.'}
         />
+
+        {supportsProofUpload && hasProofDetails && (
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Input
+              label="Monto detectado (Bs)"
+              inputMode="decimal"
+              autoComplete="off"
+              placeholder="Ej: 125.50"
+              value={detectedAmount}
+              onChange={(event) => setDetectedAmount(event.target.value)}
+            />
+            <Input
+              label="Banco emisor detectado"
+              autoComplete="off"
+              placeholder="Ej: Banesco, Mercantil, BDV"
+              value={detectedBank}
+              onChange={(event) => setDetectedBank(event.target.value)}
+            />
+          </div>
+        )}
+
+        {amountMismatch && (
+          <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden />
+            <span>
+              El comprobante indica <strong>{formatBs(parsedDetectedAmount)}</strong> y el monto exacto es{' '}
+              <strong>{formatBs(amountBs)}</strong>. Verifica antes de confirmar.
+            </span>
+          </p>
+        )}
 
         {attemptsLeft <= 2 && attemptsLeft > 0 && (
           <p className="mt-2 text-xs text-amber-400">
@@ -362,7 +451,9 @@ export function PaymentStep({
         </Button>
 
         <p className="mt-3 text-center text-xs text-slate-500">
-          {isBinancePay ? 'Verificamos tu pago con Pabilo. No subas capturas ni envíes nada por WhatsApp.' : 'Verificamos tu pago directamente con el banco. No subas capturas ni envíes nada por WhatsApp.'}
+          {isBinancePay
+            ? 'Verificamos tu pago con Pabilo. No subas capturas ni envíes nada por WhatsApp.'
+            : 'Verificamos tu pago directamente con el banco. No envíes capturas por WhatsApp.'}
         </p>
       </div>
 

@@ -230,6 +230,9 @@ export const rateSourceUrl = () =>
 /** Modelo de respuestas cortas del asistente de soporte. */
 export const geminiModel = () => fromEnv('GEMINI_MODEL', 'gemini-3.8-flash');
 
+/** Modelo multimodal rápido para lectura de comprobantes de pago con Gemini Vision. */
+export const geminiVisionModel = () => fromEnv('GEMINI_VISION_MODEL', 'gemini-4-hydrogen');
+
 const DEFAULT_ORIGINS = [
   // Dominio personalizado de producción.
   'https://recargasrefillstore.com',

@@ -11,8 +11,10 @@ import type {
   Order,
   OrderEvent,
   PaymentInstructions,
+  PaymentProofExtraction,
   PlayerFieldLabel,
   PricePreview,
+  SupportedProofMimeType,
   VerifyPaymentResponse,
 } from '@/types/models';
 
@@ -213,5 +215,16 @@ export function usePayWithWallet(orderId: string | undefined) {
       void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.me });
       void queryClient.invalidateQueries({ queryKey: ['wallet'] });
     },
+  });
+}
+
+/** Envía la captura de pago al backend para extraer referencia, monto y banco con Gemini Vision. */
+export function useAnalyzePaymentProof() {
+  return useMutation({
+    mutationFn: (input: {
+      imageBase64: string;
+      mimeType: SupportedProofMimeType;
+      orderId?: string;
+    }) => api.post<PaymentProofExtraction>('/orders/analyze-payment-proof', input),
   });
 }

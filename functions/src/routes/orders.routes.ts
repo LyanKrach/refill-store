@@ -18,6 +18,7 @@ import * as couponsService from '../services/coupons';
 import * as creatorsService from '../services/creators';
 import * as catalog from '../services/catalog';
 import * as centralOne from '../services/centralOne';
+import * as paymentProofVision from '../services/paymentProofVision';
 import { listEvents } from '../services/orderEvents';
 import { getConfig } from '../services/settings';
 import { assertStorefrontGame } from '../lib/storefront';
@@ -166,6 +167,47 @@ ordersRouter.post(
       },
       201
     );
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Lectura automática de comprobante con Gemini Vision
+// ---------------------------------------------------------------------------
+
+const analyzePaymentProofSchema = z.object({
+  imageBase64: z
+    .string()
+    .min(32, 'La captura enviada no es válida.')
+    .max(8_000_000, 'La captura supera el tamaño máximo permitido (5 MB).'),
+  mimeType: z.enum(paymentProofVision.SUPPORTED_PROOF_MIME_TYPES),
+  orderId: z.string().trim().min(1).max(120).optional(),
+});
+
+ordersRouter.post(
+  '/analyze-payment-proof',
+  rateLimit({
+    name: 'analyze_payment_proof',
+    max: 12,
+    windowSeconds: 300,
+    message: 'Has analizado muchos comprobantes seguidos. Espera unos minutos o ingresa la referencia manualmente.',
+  }),
+  asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const body = parseBody(req, analyzePaymentProofSchema);
+
+    if (body.orderId) {
+      const order = await ordersService.getOrderFor(body.orderId, user);
+      if (order.payment.method === 'binance_pay') {
+        throw invalidArgument('La lectura automática solo está disponible para Pago Móvil o Transferencia.');
+      }
+    }
+
+    const result = await paymentProofVision.analyzePaymentProof({
+      imageBase64: body.imageBase64,
+      mimeType: body.mimeType,
+    });
+
+    ok(res, result);
   })
 );
 

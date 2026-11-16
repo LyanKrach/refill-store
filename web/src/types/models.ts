@@ -850,6 +850,15 @@ export interface VerifyPaymentResponse {
   whatsappUrl: string | null;
 }
 
+export type SupportedProofMimeType = 'image/jpeg' | 'image/png' | 'image/webp';
+
+export interface PaymentProofExtraction {
+  reference: string;
+  amount: string;
+  bank: string;
+  success: boolean;
+}
+
 export interface PricePreview {
   subtotalUsd: number;
   discountUsd: number;
