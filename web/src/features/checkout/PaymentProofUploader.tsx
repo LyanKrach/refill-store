@@ -153,7 +153,7 @@ export function PaymentProofUploader({
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
           className={cn(
-            'group flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-dashed px-3.5 py-2.5 transition',
+            'group flex cursor-pointer select-none items-center justify-between gap-3 rounded-xl border border-dashed px-3.5 py-2.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neon-red/60',
             dragging
               ? 'border-neon-red bg-neon-red/10'
               : 'border-base-500/80 bg-base-900/70 hover:border-neon-red/60 hover:bg-base-900',
@@ -169,7 +169,7 @@ export function PaymentProofUploader({
                 📸 Subir captura de pago (o arrastrar imagen)
               </p>
               <p className="truncate text-[11px] text-slate-400">
-                Autocompleta referencia, monto y banco con Gemini AI · JPG, PNG o WEBP
+                Autocompleta referencia, monto y banco con Rex IA · JPG, PNG o WEBP
               </p>
             </div>
           </div>
@@ -207,7 +207,7 @@ export function PaymentProofUploader({
                 <div className="mt-1.5 flex items-center gap-2 text-xs font-medium text-amber-300">
                   <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
                   <Sparkles className="h-3.5 w-3.5 animate-pulse shrink-0 text-neon-red" aria-hidden />
-                  <span>Analizando comprobante con Gemini AI...</span>
+                  <span>Rex IA está analizando tu comprobante...</span>
                 </div>
               ) : statusNote ? (
                 <p
