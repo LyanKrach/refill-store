@@ -324,9 +324,13 @@ export async function createOrder(
   const effectiveProduct = availability.checked
     ? { ...product, active: availability.available, stock: availability.stock }
     : product;
+  const effectiveGame =
+    availability.available && catalog.isTemporarilyOutOfStockCentralOneGame(game)
+      ? { ...game, active: true, hiddenReason: null }
+      : game;
 
-  catalog.assertPurchasable(effectiveProduct, game);
-  const playerData = catalog.resolvePlayerData(input.playerFields, game);
+  catalog.assertPurchasable(effectiveProduct, effectiveGame);
+  const playerData = catalog.resolvePlayerData(input.playerFields, effectiveGame);
 
   if (effectiveProduct.fulfillment === 'manual' && !config.features.manualProductsEnabled) {
     throw failedPrecondition('Los productos manuales están desactivados temporalmente.');

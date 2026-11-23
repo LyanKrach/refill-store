@@ -293,6 +293,9 @@ export interface Product {
   /** Identificador del catálogo de FazerCards, útil para conciliación. */
   provider?: 'inefable' | 'fazercards' | 'centralone';
   providerOfferId?: string | null;
+  providerSku?: string | null;
+  inStock?: boolean;
+  availability?: 'in_stock' | 'out_of_stock';
   region?: string;
   regionCode?: string;
   regionLabel?: string;

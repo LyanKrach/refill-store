@@ -171,19 +171,47 @@ publicRouter.get(
       const anyLiveIds = results.some((r) =>
         r.items.some((g) => g.provider === 'centralone' && Array.isArray(g.liveOfferIds) && g.liveOfferIds.length > 0)
       );
-      const stockMap = anyLiveIds ? await centralOne.getLiveCatalogStockMap() : null;
+      const canRecoverOutOfStock = !cursor && centralOne.isCentralOneConfigured();
+      const [stockMap, outOfStockCoGames] = await Promise.all([
+        anyLiveIds || canRecoverOutOfStock ? centralOne.getLiveCatalogStockMap() : Promise.resolve(null),
+        canRecoverOutOfStock ? catalog.listOutOfStockCentralOneGames().catch(() => [] as Game[]) : Promise.resolve([] as Game[]),
+      ]);
+      const termLower = search?.toLowerCase() ?? null;
+      const recoveredGameIds: string[] = [];
       const visibleResults = await Promise.all(
         results.map(async (result) => {
-          const filtered = await filterLiveVisibleGames(result.items, stockMap);
-          const hidden = result.items.length - filtered.length;
+          const baseItems = [...result.items];
+          let addedRecovered = 0;
+          if (!cursor && stockMap && outOfStockCoGames.length > 0) {
+            const existingIds = new Set(baseItems.map((item) => item.id));
+            for (const oosGame of outOfStockCoGames) {
+              if (oosGame.providerFamily !== result.family || existingIds.has(oosGame.id)) continue;
+              if (!Array.isArray(oosGame.liveOfferIds) || oosGame.liveOfferIds.length === 0) continue;
+              if (termLower && !oosGame.name.toLowerCase().includes(termLower) && !oosGame.id.includes(termLower)) {
+                continue;
+              }
+              const hasLiveStock = oosGame.liveOfferIds.some((offerId) => stockMap.get(offerId)?.inStock === true);
+              if (!hasLiveStock) continue;
+              baseItems.push({ ...oosGame, active: true, hiddenReason: null });
+              existingIds.add(oosGame.id);
+              recoveredGameIds.push(oosGame.id);
+              addedRecovered += 1;
+            }
+          }
+          const filtered = await filterLiveVisibleGames(baseItems, stockMap);
+          const hidden = result.items.length + addedRecovered - filtered.length;
           return {
             ...result,
             items: filtered,
-            total: result.total === undefined ? undefined : Math.max(0, result.total - hidden),
-            categoryTotal: result.categoryTotal === undefined ? undefined : Math.max(0, result.categoryTotal - hidden),
+            total: result.total === undefined ? undefined : Math.max(0, result.total + addedRecovered - hidden),
+            categoryTotal:
+              result.categoryTotal === undefined ? undefined : Math.max(0, result.categoryTotal + addedRecovered - hidden),
           };
         })
       );
+      if (recoveredGameIds.length > 0) {
+        scheduleGameSummaryRefresh(recoveredGameIds);
+      }
       ok(res, {
         rate: config.rate.value,
         games: visibleResults.flatMap((result) => result.items.map(catalog.toPublicGame)),
@@ -242,25 +270,76 @@ async function filterAvailableProducts(productList: Product[]): Promise<Product[
   return available;
 }
 
-/** Oculta juegos de Central One sin ningún paquete disponible en vivo. */
+const SUMMARY_REFRESH_THROTTLE_MS = 60_000;
+const lastGameRefreshAt = new Map<string, number>();
+
+function scheduleGameSummaryRefresh(gameIds: string[]): void {
+  const nowMs = Date.now();
+  const due: string[] = [];
+  for (const id of gameIds) {
+    const last = lastGameRefreshAt.get(id) ?? 0;
+    if (nowMs - last >= SUMMARY_REFRESH_THROTTLE_MS) {
+      lastGameRefreshAt.set(id, nowMs);
+      due.push(id);
+    }
+  }
+  if (due.length > 0) {
+    void catalog.refreshCentralOneGameSummaries(due).catch(() => undefined);
+  }
+}
+
+/** Oculta juegos de Central One sin ningún paquete disponible en vivo y reactiva los agotados cuando vuelve el stock. */
 async function filterLiveVisibleGames(
   gameList: Game[],
   prefetchedStockMap?: Map<string, centralOne.LiveCatalogStockEntry> | null
 ): Promise<Game[]> {
-  const withCount = gameList.filter((game) => game.active !== false && (game.productCount ?? 1) > 0);
+  const candidates = gameList.filter(
+    (game) => game.active !== false || catalog.isTemporarilyOutOfStockCentralOneGame(game)
+  );
+  const checked = await Promise.all(
+    candidates.map(async (game) => {
+      if (catalog.isTemporarilyOutOfStockCentralOneGame(game)) {
+        return game;
+      }
+      if (typeof game.productCount === 'number') {
+        return game.productCount > 0 ? game : null;
+      }
+      return (await catalog.hasSellableProducts(game.id)) ? game : null;
+    })
+  );
+  const withCount = checked.filter((game): game is Game => Boolean(game));
   const needsStockMap =
     prefetchedStockMap === undefined &&
     withCount.some(
       (game) => game.provider === 'centralone' && Array.isArray(game.liveOfferIds) && game.liveOfferIds.length > 0
     );
   const stockMap = prefetchedStockMap !== undefined ? prefetchedStockMap : needsStockMap ? await centralOne.getLiveCatalogStockMap() : null;
-  if (!stockMap) return withCount;
-  return withCount.filter((game) => {
+  if (!stockMap) {
+    return withCount.filter((game) => game.active !== false);
+  }
+  const visible: Game[] = [];
+  const staleIds: string[] = [];
+  for (const game of withCount) {
     if (game.provider !== 'centralone' || !Array.isArray(game.liveOfferIds) || game.liveOfferIds.length === 0) {
-      return true;
+      if (game.active !== false) visible.push(game);
+      continue;
     }
-    return game.liveOfferIds.some((offerId) => stockMap.get(offerId)?.inStock === true);
-  });
+    const hasStock = game.liveOfferIds.some((offerId) => stockMap.get(offerId)?.inStock === true);
+    if (!hasStock) {
+      if (game.active !== false) staleIds.push(game.id);
+      continue;
+    }
+    if (catalog.isTemporarilyOutOfStockCentralOneGame(game)) {
+      staleIds.push(game.id);
+      visible.push({ ...game, active: true, hiddenReason: null });
+    } else {
+      visible.push(game);
+    }
+  }
+  if (staleIds.length > 0) {
+    scheduleGameSummaryRefresh(staleIds);
+  }
+  return visible;
 }
 
 /** Producto directo para que el checkout no dependa del catálogo entero. */
@@ -276,15 +355,20 @@ publicRouter.get(
       ? await centralOne.getLiveCatalogStockMap()
       : null;
     const availability = centralOne.resolveProductLiveAvailability(product, stockMap);
-    if (!game.active || !availability.available) {
+    const recoverableOutOfStock = catalog.isTemporarilyOutOfStockCentralOneGame(game);
+    if ((!game.active && !recoverableOutOfStock) || !availability.available) {
       throw failedPrecondition('Ese producto está agotado o no está disponible ahora.');
+    }
+    const effectiveGame = recoverableOutOfStock ? { ...game, active: true, hiddenReason: null } : game;
+    if (recoverableOutOfStock) {
+      scheduleGameSummaryRefresh([game.id]);
     }
     const effectiveProduct = availability.checked
       ? { ...product, active: true, stock: availability.stock }
       : product;
     ok(res, {
       rate: config.rate.value,
-      game: catalog.toPublicGame(game),
+      game: catalog.toPublicGame(effectiveGame),
       product: catalog.toPublicProduct(effectiveProduct, config.rate.value, config.pricing.roundToBs),
     });
   })
@@ -302,11 +386,22 @@ publicRouter.get(
       catalog.listProducts({ gameId }),
     ]);
     assertStorefrontGame(req, game);
-    if (!game.active) throw notFound('Ese juego no está disponible ahora.');
+    const recoverableOutOfStock = catalog.isTemporarilyOutOfStockCentralOneGame(game);
+    if (!game.active && !recoverableOutOfStock) throw notFound('Ese juego no está disponible ahora.');
     const productList = await filterAvailableProducts(rawProducts);
+    if (productList.length === 0) {
+      if (game.provider === 'centralone' && game.active) {
+        scheduleGameSummaryRefresh([game.id]);
+      }
+      throw notFound('Ese juego no tiene paquetes disponibles ahora.');
+    }
+    const effectiveGame = recoverableOutOfStock ? { ...game, active: true, hiddenReason: null } : game;
+    if (recoverableOutOfStock) {
+      scheduleGameSummaryRefresh([game.id]);
+    }
 
     ok(res, {
-      game: catalog.toPublicGame(game),
+      game: catalog.toPublicGame(effectiveGame),
       rate: config.rate.value,
       products: productList.map((product) =>
         catalog.toPublicProduct(product, config.rate.value, config.pricing.roundToBs)

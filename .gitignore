@@ -48,6 +48,7 @@ yarn-error.log*
 
 # --- Exportaciones y temporales ---------------------------------------------
 testers-export/
+backups/
 *.csv
 
 # --- Sistema operativo y editores -------------------------------------------

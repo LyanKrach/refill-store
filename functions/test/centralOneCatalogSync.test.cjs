@@ -358,6 +358,10 @@ test('isFreeFireCard: sólo tarjetas semanales/mensuales de Free Fire', () => {
 test('centralOneOfferLabel quita el nombre del juego', () => {
   assert.equal(sync.centralOneOfferLabel('Free Fire (BR) · 110 Diamantes', 'Free Fire'), '110 Diamantes');
   assert.equal(sync.centralOneOfferLabel('Free Fire 110 Diamantes', 'Free Fire'), '110 Diamantes');
+  assert.equal(
+    sync.centralOneOfferLabel('Free Fire 110 Diamantes (100 + 10% de bono) · PIN', 'Free Fire'),
+    '110 Diamantes (100 + 10% de bono) · PIN'
+  );
   assert.equal(sync.centralOneOfferLabel('1 USD · USDT', 'Binance'), '1 USD · USDT');
 });
 
@@ -1119,4 +1123,167 @@ test('newCentralOneGameDoc: si todas las ofertas llegan sin stock nace oculto po
   const doc = sync.newCentralOneGameDoc(ml, { productCount: 0 }, null, Timestamp.now());
   assert.equal(doc.active, false);
   assert.equal(doc.hiddenReason, 'out_of_stock');
+});
+
+test('shouldSkipEmptyNewCentralOneGame: omite juegos nuevos sin ofertas disponibles salvo si ya existen o son Free Fire LATAM', () => {
+  const unavailableOffer = { providerAvailable: false };
+  const availableOffer = { providerAvailable: true };
+
+  assert.equal(
+    sync.shouldSkipEmptyNewCentralOneGame(
+      { isFreeFireLatam: false, offers: [unavailableOffer] },
+      undefined
+    ),
+    true
+  );
+  assert.equal(
+    sync.shouldSkipEmptyNewCentralOneGame(
+      { isFreeFireLatam: false, offers: [unavailableOffer] },
+      { id: 'co-topup-existing' }
+    ),
+    false
+  );
+  assert.equal(
+    sync.shouldSkipEmptyNewCentralOneGame(
+      { isFreeFireLatam: true, offers: [unavailableOffer] },
+      undefined
+    ),
+    false
+  );
+  assert.equal(
+    sync.shouldSkipEmptyNewCentralOneGame(
+      { isFreeFireLatam: false, offers: [unavailableOffer, availableOffer] },
+      undefined
+    ),
+    false
+  );
+});
+
+test('mapCentralOneCatalog: PINs sin requires_target entran como gift_card PIN y no se descartan', () => {
+  const mapping = sync.mapCentralOneCatalog([
+    item({
+      product_id: 'ff-pin-110',
+      name: 'Free Fire 110 Diamantes (100 + 10% de bono) · PIN',
+      category: 'gaming_topup',
+      requires_target: false,
+      target_fields: [],
+      target_schema: [],
+      reseller_price: '0.6962',
+    }),
+    item({
+      product_id: 'ff-pin-341',
+      name: 'Free Fire 341 Diamantes (310 + 10% de bono) · PIN',
+      category: 'gaming_topup',
+      requires_target: false,
+      target_fields: [],
+      target_schema: [],
+      reseller_price: '2.0785',
+    }),
+    item({
+      product_id: 'ff-bad-notarget',
+      name: 'Free Fire sin campos',
+      category: 'gaming_topup',
+      requires_target: true,
+      target_fields: [],
+      target_schema: [],
+      reseller_price: '0.5000',
+    }),
+  ]);
+  const pinGame = mapping.games.find((g) => g.family === 'gift_card');
+  assert.ok(pinGame, 'crea la categoría gift_card para los PINs');
+  assert.equal(pinGame.offers.length, 2, 'conserva cada denominación PIN LATAM sin colapsar');
+  assert.equal(pinGame.offers[0].productId, 'ff-pin-110');
+  assert.equal(pinGame.offers[0].label, '110 Diamantes (100 + 10% de bono) · PIN');
+  assert.equal(pinGame.offers[0].badge, 'PIN');
+  assert.deepEqual(pinGame.offers[0].targetFields, []);
+  assert.equal(mapping.skipped.no_target, 1, 'topup con requires_target:true y sin campos sigue descartado');
+});
+
+test('deduplicationKeyForOffer: no colapsa packs/plataformas/monedas distintas y sí colapsa duplicados puros', () => {
+  const k = (label, overrides = {}) =>
+    sync.deduplicationKeyForOffer(
+      {
+        productId: 'p',
+        kind: sync.classifyCentralOneKind(label, 'topup'),
+        label,
+        amount: sync.parseOfferAmount(label).amount ?? 0,
+        bonus: sync.parseOfferAmount(label).bonus ?? 0,
+        preserveDistinct: false,
+        ...overrides,
+      },
+      'Tokens'
+    );
+
+  assert.notEqual(k('Anima Pack 1'), k('Breakthrough Pack 1'));
+  assert.notEqual(k('(Android) 119 Rainbow Cards'), k('(iOS) 119 Rainbow Cards'));
+  assert.notEqual(k('325 WOW Coins'), k('325 UC'));
+  assert.notEqual(k('Account Evaluation Pack(S)'), k('Account Evaluation Pack(S+)'));
+  assert.notEqual(k('Level 6'), k('6 Diamantes'));
+  assert.equal(k('16 Tokens'), k('16 Tokens', { label: '16 Tokens' }));
+  assert.equal(
+    sync.deduplicationKeyForOffer(
+      { productId: '1', kind: 'package', label: '16', amount: 16, bonus: 0, preserveDistinct: false },
+      'Tokens'
+    ),
+    sync.deduplicationKeyForOffer(
+      { productId: '2', kind: 'package', label: '16 Tokens', amount: 16, bonus: 0, preserveDistinct: false },
+      'Tokens'
+    )
+  );
+});
+
+test('planFreeFireLevelUpCombo: suma exacta a 4 decimales y respeta priceLocked y adminDisabled', () => {
+  const levels = [
+    [6, 'lvl-6', 0.2524],
+    [10, 'lvl-10', 0.4038],
+    [15, 'lvl-15', 0.4038],
+    [20, 'lvl-20', 0.4038],
+    [25, 'lvl-25', 0.4038],
+    [30, 'lvl-30', 0.6763],
+  ];
+  const makeOffers = (oosLevel = null) =>
+    levels.map(([lvl, id, costUsd]) => ({
+      docId: `co-topup-free-fire-latam--${id}`,
+      productId: id,
+      providerSku: id,
+      sku: id,
+      label: `Nivel ${lvl}`,
+      description: '',
+      costUsd,
+      stock: lvl === oosLevel ? 0 : null,
+      providerAvailable: lvl !== oosLevel,
+      kind: 'level_up',
+      amount: lvl,
+      bonus: 0,
+      targetFields: ['player_id'],
+      isFreeFireCard: false,
+      sortOrder: lvl,
+      badge: null,
+      deliveryEtaMinutes: 2,
+    }));
+
+  const combo = sync.planFreeFireLevelUpCombo({
+    plan: { id: 'co-topup-free-fire-latam', targetFields: ['player_id'], offers: makeOffers() },
+    existingProduct: { priceLocked: true, priceUsd: 3.5, adminDisabled: false },
+    pricing: { marginPercent: 20, roundToUsd: 0.05 },
+    timestamp: Timestamp.now(),
+  });
+  assert.equal(combo.costUsd, 2.5439);
+  assert.equal(combo.priceUsd, 3.5, 'respeta priceLocked mientras cost <= priceUsd');
+  assert.equal(combo.active, true);
+  assert.equal(combo.inStock, true);
+  assert.equal(combo.availability, 'in_stock');
+  assert.equal(combo.calls.length, 6);
+
+  const oosCombo = sync.planFreeFireLevelUpCombo({
+    plan: { id: 'co-topup-free-fire-latam', targetFields: ['player_id'], offers: makeOffers(15) },
+    existingProduct: { priceLocked: true, priceUsd: 2.0, adminDisabled: false },
+    pricing: { marginPercent: 20, roundToUsd: 0.05 },
+    timestamp: Timestamp.now(),
+  });
+  assert.equal(oosCombo.active, false);
+  assert.equal(oosCombo.stock, 0);
+  assert.equal(oosCombo.inStock, false);
+  assert.equal(oosCombo.availability, 'out_of_stock');
+  assert.ok(oosCombo.priceUsd > 2.5439, 'recalcula precio si cost supera al priceLocked');
 });

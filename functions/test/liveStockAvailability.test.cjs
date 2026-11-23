@@ -207,3 +207,61 @@ test('isCentralOnePackageUnavailableFailure & backoff: separa fallos de línea/s
   assert.equal(dispatchPauseDurationMs('unknown', 2), 60 * 60_000);
   assert.equal(dispatchPauseDurationMs('unknown', 3), 6 * 60 * 60_000);
 });
+
+test('isTemporarilyOutOfStockCentralOneGame: sólo juegos CO ocultos por out_of_stock y no retirados ni pausados por admin', () => {
+  const path = require('node:path');
+  const { Timestamp } = require('firebase-admin/firestore');
+  const fbPath = path.resolve(__dirname, '../lib/config/firebase.js');
+  if (!require.cache[fbPath]) {
+    require.cache[fbPath] = {
+      id: fbPath,
+      filename: fbPath,
+      loaded: true,
+      exports: {
+        db: {},
+        games: () => ({}),
+        products: () => ({}),
+        now: () => Timestamp.now(),
+        Timestamp,
+      },
+    };
+  }
+  const { isTemporarilyOutOfStockCentralOneGame } = require('../lib/services/catalog');
+
+  assert.equal(
+    isTemporarilyOutOfStockCentralOneGame({
+      provider: 'centralone',
+      active: false,
+      hiddenReason: 'out_of_stock',
+      providerRemoved: false,
+    }),
+    true
+  );
+  assert.equal(
+    isTemporarilyOutOfStockCentralOneGame({
+      provider: 'centralone',
+      active: false,
+      hiddenReason: null,
+      providerRemoved: false,
+    }),
+    false
+  );
+  assert.equal(
+    isTemporarilyOutOfStockCentralOneGame({
+      provider: 'centralone',
+      active: false,
+      hiddenReason: 'out_of_stock',
+      providerRemoved: true,
+    }),
+    false
+  );
+  assert.equal(
+    isTemporarilyOutOfStockCentralOneGame({
+      provider: 'centralone',
+      active: true,
+      hiddenReason: null,
+      providerRemoved: false,
+    }),
+    false
+  );
+});

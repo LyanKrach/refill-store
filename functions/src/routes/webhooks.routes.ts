@@ -396,14 +396,20 @@ export function productPatchFromChange(
   if (change.in_catalog === false) {
     if (product.active) patch.active = false;
     if (!product.providerRemoved) patch.providerRemoved = true;
+    patch.inStock = false;
+    patch.availability = 'out_of_stock';
   } else if (stock === 0) {
     if (product.active) patch.active = false;
+    patch.inStock = false;
+    patch.availability = 'out_of_stock';
   } else if (
     stock !== undefined &&
     stock !== 0 &&
     product.adminDisabled !== true &&
     product.providerRemoved !== true
   ) {
+    patch.inStock = true;
+    patch.availability = 'in_stock';
     if (product.stock === 0 && !product.active) {
       patch.active = true;
     }
@@ -412,6 +418,9 @@ export function productPatchFromChange(
       patch.providerPauseReason = null;
       patch.consecutiveDispatchFailures = 0;
     }
+  } else if (stock !== undefined && stock !== 0) {
+    patch.inStock = true;
+    patch.availability = 'in_stock';
   }
 
   return { patch, lossGuard };

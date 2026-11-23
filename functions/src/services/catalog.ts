@@ -824,6 +824,29 @@ export async function refreshManualGameSummary(gameId: string): Promise<void> {
 }
 
 /**
+ * Verifica en Firestore si el juego tiene al menos un paquete activo y vendible.
+ * Sirve de respaldo cuando un juego no trae `productCount` precalculado.
+ */
+export async function hasSellableProducts(gameId: string): Promise<boolean> {
+  const snap = await products()
+    .where('gameId', '==', gameId)
+    .where('active', '==', true)
+    .limit(10)
+    .get();
+  return snap.docs.some((doc) => {
+    const p = doc.data() as Partial<Product>;
+    return (
+      typeof p.priceUsd === 'number' &&
+      Number.isFinite(p.priceUsd) &&
+      p.priceUsd > 0 &&
+      p.providerRemoved !== true &&
+      p.adminDisabled !== true &&
+      (p.stock === null || p.stock === undefined || p.stock > 0)
+    );
+  });
+}
+
+/**
  * Recalcula `productCount`, `minPriceUsd`, `liveOfferIds` y la visibilidad
  * automática de los juegos de Central One tras cambios por webhook o fallos de despacho.
  */
@@ -846,20 +869,22 @@ export async function refreshCentralOneGameSummaries(gameIds: string[]): Promise
     const liveOfferIds = new Set<string>();
     for (const doc of prodSnap.docs) {
       const p = doc.data() as Product;
-      if (
-        p.active === true &&
-        p.adminDisabled !== true &&
-        p.providerRemoved !== true &&
-        !isProductDispatchPaused(p, nowMs) &&
-        (p.stock === null || p.stock > 0)
-      ) {
-        available.push(p);
+      if (p.adminDisabled !== true && p.providerRemoved !== true) {
         for (const call of p.calls ?? []) {
           if ((call.provider ?? p.provider) === 'centralone' && call.packageId) {
             liveOfferIds.add(String(call.packageId));
           }
         }
         if (p.providerOfferId) liveOfferIds.add(String(p.providerOfferId));
+      }
+      if (
+        p.active === true &&
+        p.adminDisabled !== true &&
+        p.providerRemoved !== true &&
+        !isProductDispatchPaused(p, nowMs) &&
+        (p.stock === null || p.stock === undefined || p.stock > 0)
+      ) {
+        available.push(p);
       }
     }
 
@@ -948,12 +973,68 @@ export async function repriceProducts(options: {
   return { updated: changes.length, changes };
 }
 
+const OUT_OF_STOCK_CACHE_TTL_MS = 15_000;
+let outOfStockCoCache: { expiresAt: number; games: Game[]; inFlight: Promise<Game[]> | null } = {
+  expiresAt: 0,
+  games: [],
+  inFlight: null,
+};
+
+/**
+ * Indica si un juego de Central One fue ocultado automáticamente por agotado
+ * temporal (sin haber sido apagado por el admin ni retirado del catálogo).
+ */
+export function isTemporarilyOutOfStockCentralOneGame(
+  game: Pick<Game, 'provider' | 'active' | 'hiddenReason' | 'providerRemoved'>
+): boolean {
+  return (
+    game.provider === 'centralone' &&
+    game.active === false &&
+    game.hiddenReason === 'out_of_stock' &&
+    game.providerRemoved !== true
+  );
+}
+
+/**
+ * Lista los juegos de Central One ocultos temporalmente por `out_of_stock`
+ * (caché ligera de 15 s) para que la tienda pública pueda reactivarlos en
+ * tiempo real apenas el stock vivo vuelva a ser positivo.
+ */
+export async function listOutOfStockCentralOneGames(family?: FazerFamily): Promise<Game[]> {
+  const nowMs = Date.now();
+  let list: Game[];
+  if (nowMs < outOfStockCoCache.expiresAt) {
+    list = outOfStockCoCache.games;
+  } else if (outOfStockCoCache.inFlight) {
+    list = await outOfStockCoCache.inFlight;
+  } else {
+    outOfStockCoCache.inFlight = (async () => {
+      try {
+        const snap = await games()
+          .where('provider', '==', 'centralone')
+          .where('hiddenReason', '==', 'out_of_stock')
+          .get();
+        const items = snap.docs
+          .map((doc) => ({ id: doc.id, ...doc.data() }) as Game)
+          .filter((game) => isTemporarilyOutOfStockCentralOneGame(game));
+        outOfStockCoCache.games = items;
+        outOfStockCoCache.expiresAt = Date.now() + OUT_OF_STOCK_CACHE_TTL_MS;
+        return items;
+      } finally {
+        outOfStockCoCache.inFlight = null;
+      }
+    })();
+    list = await outOfStockCoCache.inFlight;
+  }
+  return family ? list.filter((game) => game.providerFamily === family) : list;
+}
+
 /**
  * Invalida la caché en memoria del catálogo para asegurar que cualquier
  * cambio en juegos o productos se refleje de inmediato en la tienda pública.
  */
 export function invalidateCatalogCache(): void {
-  // Punto central de invalidación en memoria para el catálogo público.
+  outOfStockCoCache = { expiresAt: 0, games: [], inFlight: null };
 }
 
 /**

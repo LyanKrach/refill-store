@@ -355,8 +355,12 @@ ordersRouter.post(
     const effectiveProduct = availability.checked
       ? { ...product, active: availability.available, stock: availability.stock }
       : product;
-    catalog.assertPurchasable(effectiveProduct, game);
-    assertOrderQuantity(effectiveProduct, game, body.quantity);
+    const effectiveGame =
+      availability.available && catalog.isTemporarilyOutOfStockCentralOneGame(game)
+        ? { ...game, active: true, hiddenReason: null }
+        : game;
+    catalog.assertPurchasable(effectiveProduct, effectiveGame);
+    assertOrderQuantity(effectiveProduct, effectiveGame, body.quantity);
 
     const subtotalUsd = round(product.priceUsd * body.quantity, 4);
     const tierPercent = await usersService.tierDiscountPercent(profile.tier);

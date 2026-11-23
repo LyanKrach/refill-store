@@ -171,7 +171,11 @@ export function centralOneOfferLabel(name: string, familyName: string): string {
   const family = asciiFold((familyName ?? '').trim());
   if (!family) return full;
   const segments = full.split(/\s+·\s+/);
-  if (segments.length > 1 && asciiFold(segments[0]).startsWith(family)) {
+  if (
+    segments.length > 1 &&
+    asciiFold(segments[0]).startsWith(family) &&
+    !/\d/.test(segments[0].slice(familyName.trim().length))
+  ) {
     const rest = segments.slice(1).join(' · ').trim();
     if (rest) return rest;
   }
@@ -270,7 +274,7 @@ function levelOf(label: string): number | null {
 const LEVEL_UP_PASS = /level\s*up\s*pass/i;
 const LEVEL_UP = /\b(level\s*up|subida\s+de\s+nivel|nivel\s*\d+|lvl\s*\d*)\b/i;
 const SPECIAL_WORDS =
-  /\b(pass|pase|membership|membres[ií]a|card|tarjeta|bundle|cofre|chest|bag|bolsa|evo|subscription|suscripci[oó]n|weekly|monthly|semanal|mensual)\b/i;
+  /\b(pass|pase|membership|membres[ií]a|card|tarjeta|bundle|cofre|chest|bag|bolsa|evo|subscription|suscripci[oó]n|weekly|monthly|semanal|mensual|pack|giftpack|reward|rewards|reserve|rental|voucher|deal|box|crate|ticket|vip)\b/i;
 
 /**
  * Naturaleza comercial de una oferta (D5).
@@ -344,6 +348,8 @@ const CURRENCY_WORDS: Record<string, { label: string; icon: string }> = {
   tokens: { label: 'Tokens', icon: '🎟️' },
   crystal: { label: 'Cristales', icon: '🔮' },
   crystals: { label: 'Cristales', icon: '🔮' },
+  lunite: { label: 'Lunite', icon: '🌙' },
+  lunites: { label: 'Lunite', icon: '🌙' },
   primogems: { label: 'Protogemas', icon: '💎' },
   points: { label: 'Puntos', icon: '🎯' },
   credits: { label: 'Créditos', icon: '🪙' },
@@ -584,6 +590,7 @@ export interface CentralOneOffer {
   docId: string;
   /** `product_id` de Central One. */
   productId: string;
+  providerSku: string | null;
   sku: string;
   label: string;
   description: string;
@@ -597,6 +604,7 @@ export interface CentralOneOffer {
   /** Claves de `target_payload` (`[]` en gift cards). */
   targetFields: string[];
   isFreeFireCard: boolean;
+  isPin?: boolean;
   /** Conserva variantes distintas del mismo nombre (p. ej. los 3 Pase Booyah) y sincroniza nombre/etiqueta. */
   preserveDistinct?: boolean;
   sortOrder: number;
@@ -669,10 +677,113 @@ function stockOf(item: Pick<CoCatalogItem, 'in_stock' | 'available_stock'>): num
   return typeof available === 'number' && Number.isFinite(available) ? Math.max(0, Math.floor(available)) : null;
 }
 
-function offerDescription(family: CoFamily, kind: ProductKind, gameName: string): string {
+function offerDescription(family: CoFamily, kind: ProductKind, gameName: string, isPin = false): string {
+  if (isPin) return `PIN digital oficial de ${gameName} para canje directo.`;
   if (family === 'gift_card') return 'Código digital para canjear en la región indicada.';
   if (kind === 'level_up') return `Subida de nivel automática de ${gameName}. Se carga directamente a tu cuenta con tu ID.`;
   return `Recarga automática de ${gameName}.`;
+}
+
+const UNIT_ALIASES: Record<string, string> = {
+  diamond: 'diamantes',
+  diamonds: 'diamantes',
+  diamante: 'diamantes',
+  diamantes: 'diamantes',
+  token: 'tokens',
+  tokens: 'tokens',
+  ficha: 'tokens',
+  fichas: 'tokens',
+  coin: 'coins',
+  coins: 'coins',
+  moneda: 'coins',
+  monedas: 'coins',
+  gem: 'gems',
+  gems: 'gems',
+  gema: 'gems',
+  gemas: 'gems',
+  key: 'keys',
+  keys: 'keys',
+  llave: 'keys',
+  llaves: 'keys',
+  crystal: 'crystals',
+  crystals: 'crystals',
+  cristal: 'crystals',
+  cristales: 'crystals',
+  voucher: 'vouchers',
+  vouchers: 'vouchers',
+  opal: 'opals',
+  opals: 'opals',
+  lunite: 'lunite',
+  lunites: 'lunite',
+  uc: 'uc',
+  cp: 'cp',
+  bc: 'bc',
+  gold: 'gold',
+  oro: 'gold',
+  point: 'points',
+  points: 'points',
+  punto: 'points',
+  puntos: 'points',
+  credit: 'credits',
+  credits: 'credits',
+  credito: 'credits',
+  creditos: 'credits',
+  primogem: 'primogems',
+  primogems: 'primogems',
+  protogema: 'primogems',
+  protogemas: 'primogems',
+};
+
+function normalizeOfferKey(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\+/g, 'plus')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function normalizeOfferUnit(raw: string): string {
+  const folded = raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+  return UNIT_ALIASES[folded] ?? folded;
+}
+
+const PURE_DENOM_DISALLOWED =
+  /\((?:android|ios|pc|xbox|ps|nintendo|steam)\)|\b(?:wow|bp|season|day|days|dias|días|month|months|week|weeks|rental|pin|usd|eur|brl|kzt|pack|reward|rewards|reserve|deal|voucher|ticket|vip|x\d+)\b|&/i;
+const PURE_DENOM_SUFFIX =
+  /^\s*\d[\d.,]*(?:\s*\+\s*\d[\d.,]*)?(?:\s+([a-zA-Z\u00C0-\u017F]{2,20}))?(?:\s*\([^)]*bono[^)]*\))?\s*$/i;
+const PURE_DENOM_PREFIX =
+  /^\s*([a-zA-Z\u00C0-\u017F]{2,20})\s+\d[\d.,]*(?:\s*\+\s*\d[\d.,]*)?\s*$/i;
+
+/**
+ * Genera la clave de deduplicación de una oferta dentro de su juego.
+ * Sólo colapsa denominaciones numéricas puras equivalentes (p. ej. "16" y
+ * "16 Tokens"); paquetes con modificadores, plataformas o monedas distintas
+ * conservan su identidad exacta para no perder ofertas válidas.
+ */
+export function deduplicationKeyForOffer(
+  offer: Pick<CentralOneOffer, 'productId' | 'kind' | 'label' | 'amount' | 'bonus' | 'preserveDistinct'>,
+  gameCurrencyLabel: string
+): string {
+  if (offer.preserveDistinct) return `booyah:${offer.productId}`;
+  if (offer.kind === 'level_up') {
+    return `level_up:${offer.amount > 0 ? offer.amount : normalizeOfferKey(offer.label)}`;
+  }
+  const label = (offer.label ?? '').trim();
+  if (offer.kind === 'package' && offer.amount > 0 && !PURE_DENOM_DISALLOWED.test(label)) {
+    const suffixMatch = label.match(PURE_DENOM_SUFFIX);
+    const prefixMatch = suffixMatch ? null : label.match(PURE_DENOM_PREFIX);
+    if (suffixMatch || prefixMatch) {
+      const rawUnit = suffixMatch?.[1] || prefixMatch?.[1] || gameCurrencyLabel || 'default';
+      const unit = normalizeOfferUnit(rawUnit);
+      return `pkg:${offer.amount}:${offer.bonus}:${unit}`;
+    }
+  }
+  return `exact:${normalizeOfferKey(label)}`;
 }
 
 /**
@@ -727,7 +838,12 @@ export function mapCentralOneCatalog(
       skip('no_product_id');
       continue;
     }
-    const family = CO_CATEGORY_FAMILY[String(item.category ?? '')];
+    const rawCategory = String(item.category ?? '');
+    const isGamingPin =
+      rawCategory === 'gaming_topup' &&
+      item.requires_target === false &&
+      targetFieldsOf(item).length === 0;
+    const family: CoFamily | undefined = isGamingPin ? 'gift_card' : CO_CATEGORY_FAMILY[rawCategory];
     if (item.status !== 'active') {
       skip('inactive');
       // Si ya se publicó, se apaga (no se marca retirado: sigue en el catálogo).
@@ -854,18 +970,26 @@ export function mapCentralOneCatalog(
             ? levelOf(label) ?? parsed.amount ?? 0
             : parsed.amount ?? 0;
       const stock = stockOf(item);
+      const isGamingPin =
+        String(item.category ?? '') === 'gaming_topup' &&
+        item.requires_target === false &&
+        targetFieldsOf(item).length === 0;
+      const isPin = isGamingPin || (family === 'gift_card' && /\bpin\b/i.test(label));
       const badge =
         family === 'gift_card'
-          ? 'GIFT CARD'
+          ? isPin
+            ? 'PIN'
+            : 'GIFT CARD'
           : distinctBooyah && isLimitedFreeFireBooyah(item, stock)
             ? 'LIMITADO'
             : null;
       offers.push({
         docId: coProductId(id, item.product_id),
         productId: item.product_id,
+        providerSku: text(item.sku),
         sku: `CO-${family === 'topup' ? 'TOP' : 'GIFT'}-${item.product_id}`.slice(0, 40),
         label,
-        description: offerDescription(family, kind, isFreeFireLatam ? 'Free Fire' : familyName),
+        description: offerDescription(family, kind, isFreeFireLatam ? 'Free Fire' : familyName, isPin),
         costUsd,
         stock,
         providerAvailable: stock === null || stock > 0,
@@ -874,6 +998,7 @@ export function mapCentralOneCatalog(
         bonus: family === 'topup' ? parsed.bonus : 0,
         targetFields,
         isFreeFireCard: card,
+        isPin,
         preserveDistinct: distinctBooyah,
         sortOrder: family === 'topup' ? amount || 99 : 99,
         badge,
@@ -881,23 +1006,11 @@ export function mapCentralOneCatalog(
       });
     }
 
-    // Deduplicación estricta de ofertas dentro del mismo juego:
-    // Si existen dos o más paquetes que entregan la misma cantidad numérica base y bono,
-    // o el mismo especial/gift card, quedarse ÚNICAMENTE con uno:
-    // priorizando que esté activo/disponible en proveedor, tenga el nombre formateado con unidad y menor costo.
+    // Deduplicación de ofertas dentro del mismo juego usando clave segura.
     const seenOfferKeys = new Map<string, CentralOneOffer>();
 
     for (const offer of offers) {
-      const isPkg = offer.kind === 'package' || (offer.amount > 0 && offer.kind !== 'special');
-      let key: string;
-      if (offer.preserveDistinct) {
-        key = `booyah:${offer.productId}`;
-      } else if (isPkg && offer.amount > 0) {
-        key = `pkg:${offer.amount}:${offer.bonus}:${currency.label.toLowerCase()}`;
-      } else {
-        const clean = offer.label.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
-        key = `special:${clean}`;
-      }
+      const key = deduplicationKeyForOffer(offer, currency.label);
 
       const existing = seenOfferKeys.get(key);
       if (!existing) {
@@ -1724,6 +1837,8 @@ export function planCentralOneCombos(input: CentralOneComboPlanInput): {
       featured: current?.featured ?? false,
       sortOrder: spec.sortOrder,
       stock,
+      inStock,
+      availability: inStock ? 'in_stock' : 'out_of_stock',
       deliveryEtaMinutes: 2,
       providerRemoved: false,
       providerSyncedAt: input.timestamp,
@@ -1738,6 +1853,98 @@ export function planCentralOneCombos(input: CentralOneComboPlanInput): {
   }
 
   return { combos, seenIds };
+}
+
+const LEVEL_UP_SEQUENCE = [6, 10, 15, 20, 25, 30] as const;
+
+export interface FreeFireLevelUpComboInput {
+  plan: Pick<CentralOneGamePlan, 'id' | 'targetFields' | 'offers'>;
+  existingProduct?: DocData | undefined;
+  pricing: { marginPercent: number; roundToUsd: number };
+  timestamp: unknown;
+}
+
+/**
+ * Mantiene sincronizado el combo «Aumento de Nivel Completo (6 al 30)» en el
+ * juego de Central One (`co-topup-free-fire-latam--nivel-completo`), usando el
+ * costo exacto a 4 decimales de los 6 niveles y respetando `priceLocked` /
+ * `adminDisabled`.
+ */
+export function planFreeFireLevelUpCombo(input: FreeFireLevelUpComboInput): DocData | null {
+  const matched: CentralOneOffer[] = [];
+  for (const level of LEVEL_UP_SEQUENCE) {
+    const offer = input.plan.offers.find((item) => item.kind === 'level_up' && item.amount === level);
+    if (!offer) return null;
+    matched.push(offer);
+  }
+
+  const targetFields = input.plan.targetFields.length > 0 ? [...input.plan.targetFields] : ['player_id'];
+  const calls: DispatchCall[] = matched.map((offer) => ({
+    packageId: offer.productId,
+    quantity: 1,
+    provider: 'centralone',
+    targetFields: [...targetFields],
+  }));
+
+  const costUsd = round(
+    matched.reduce((sum, offer) => sum + offer.costUsd, 0),
+    4
+  );
+  const inStock = matched.every((offer) => offer.providerAvailable && (offer.stock === null || offer.stock > 0));
+  const freshPrice = applyMargin(costUsd, input.pricing.marginPercent, input.pricing.roundToUsd);
+  const current = input.existingProduct;
+
+  let priceUsd = freshPrice;
+  if (current && current.priceLocked === true && typeof current.priceUsd === 'number') {
+    priceUsd = costUsd > current.priceUsd ? freshPrice : current.priceUsd;
+  }
+
+  const adminDisabled = current?.adminDisabled === true;
+  const active = inStock && !adminDisabled;
+  const stock = inStock ? null : 0;
+  const docId = `${input.plan.id}--nivel-completo`;
+
+  const data: DocData = {
+    id: docId,
+    gameId: input.plan.id,
+    sku: typeof current?.sku === 'string' && current.sku ? current.sku : 'FF-CO-NIVEL-ALL-CO',
+    name: typeof current?.name === 'string' && current.name ? current.name : 'Aumento de Nivel Completo (6 al 30)',
+    description:
+      typeof current?.description === 'string' && current.description
+        ? current.description
+        : 'Aumento de nivel completo del nivel 6 al 30 para Free Fire. Se cargan los 6 paquetes de forma automática directamente con tu ID.',
+    fulfillment: 'auto',
+    manualFlow: 'notify',
+    kind: 'level_up',
+    amount: typeof current?.amount === 'number' && current.amount > 0 ? current.amount : 1000,
+    bonus: 0,
+    costUsd,
+    priceUsd,
+    compareAtUsd: current?.compareAtUsd ?? null,
+    calls,
+    targetFields,
+    provider: 'centralone',
+    imageUrl: typeof current?.imageUrl === 'string' ? current.imageUrl : '',
+    badge: current?.badge !== undefined ? current.badge : 'COMBO COMPLETO',
+    active,
+    adminDisabled,
+    priceLocked: current?.priceLocked === true,
+    featured: current?.featured ?? false,
+    sortOrder: typeof current?.sortOrder === 'number' ? current.sortOrder : 200,
+    stock,
+    inStock,
+    availability: inStock ? 'in_stock' : 'out_of_stock',
+    deliveryEtaMinutes: typeof current?.deliveryEtaMinutes === 'number' ? current.deliveryEtaMinutes : 5,
+    providerRemoved: false,
+    providerSyncedAt: input.timestamp,
+    updatedAt: input.timestamp,
+  };
+
+  if (!current) {
+    data.createdAt = input.timestamp;
+  }
+
+  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -1947,6 +2154,17 @@ export function newCentralOneGameDoc(
   };
 }
 
+/**
+ * Evita crear un juego nuevo de Central One si todas sus ofertas llegan sin
+ * stock o no disponibles (salvo Free Fire LATAM, que recibe los extras).
+ */
+export function shouldSkipEmptyNewCentralOneGame(
+  plan: CentralOneGamePlan,
+  existingGame: unknown
+): boolean {
+  return !existingGame && !plan.isFreeFireLatam && !plan.offers.some((o) => o.providerAvailable);
+}
+
 /** Escribe un juego y sus productos (sólo lo que cambió). */
 function upsertGame(
   ctx: SyncContext,
@@ -1976,6 +2194,7 @@ function upsertGame(
     if (!current) {
       const adminDisabled = false;
       const active = offer.providerAvailable;
+      const inStock = offer.stock === null || offer.stock > 0;
       ctx.writer.set(
         products().doc(offer.docId),
         {
@@ -1995,6 +2214,7 @@ function upsertGame(
           targetFields: [...offer.targetFields],
           provider: 'centralone',
           providerOfferId: offer.productId,
+          providerSku: offer.providerSku,
           imageUrl: plan.family === 'gift_card' ? gameImage : extraImage(offer.label, offer.kind),
           badge: offer.badge,
           region: plan.region,
@@ -2011,6 +2231,8 @@ function upsertGame(
           featured: false,
           sortOrder: offer.sortOrder,
           stock: offer.stock,
+          inStock,
+          availability: inStock ? 'in_stock' : 'out_of_stock',
           deliveryEtaMinutes: offer.deliveryEtaMinutes,
           providerRemoved: false,
           providerSyncedAt: ts,
@@ -2022,6 +2244,8 @@ function upsertGame(
       ctx.summary.productsCreated += 1;
       if (active) {
         sold.push(freshPrice);
+      }
+      if (!adminDisabled) {
         liveOfferIds.push(offer.productId);
       }
       continue;
@@ -2046,16 +2270,21 @@ function upsertGame(
     const pausedByDispatch = centralOne.isProductDispatchPaused(current as Partial<Product>);
     const active = offer.providerAvailable && !adminDisabled && !pausedByDispatch;
     const effectiveStock = pausedByDispatch ? 0 : offer.stock;
+    const inStock = effectiveStock === null || effectiveStock > 0;
+    const availability = inStock ? 'in_stock' : 'out_of_stock';
     const desiredImageUrl = (current.imageUrl as string | undefined) || (plan.family === 'gift_card' ? gameImage : extraImage(offer.label, offer.kind));
     const changed = changedPatch(current, {
       ...(offer.preserveDistinct ? { name: offer.label, badge: offer.badge } : {}),
       provider: 'centralone',
       providerOfferId: offer.productId,
+      providerSku: offer.providerSku,
       calls,
       targetFields: [...offer.targetFields],
       costUsd: offer.costUsd,
       priceUsd,
       stock: effectiveStock,
+      inStock,
+      availability,
       active,
       imageUrl: desiredImageUrl,
       region: plan.region,
@@ -2074,6 +2303,8 @@ function upsertGame(
     }
     if (active) {
       sold.push(priceUsd);
+    }
+    if (!adminDisabled) {
       liveOfferIds.push(offer.productId);
     }
   }
@@ -2499,6 +2730,7 @@ export async function runCentralOneSync(opts: {
         }
       }
       if (isFF) {
+        productIds.add(`${plan.id}--nivel-completo`);
         for (const spec of FREE_FIRE_LATAM_COMBO_SPECS) {
           productIds.add(`${plan.id}--${spec.idSuffix}`);
           productIds.add(`ff-${spec.idSuffix}`);
@@ -2549,6 +2781,10 @@ export async function runCentralOneSync(opts: {
         summary.skipped.manual_game = (summary.skipped.manual_game ?? 0) + 1;
         continue;
       }
+      if (shouldSkipEmptyNewCentralOneGame(plan, coGames.get(plan.id))) {
+        summary.skipped.empty_new_game = (summary.skipped.empty_new_game ?? 0) + 1;
+        continue;
+      }
       upsertGame(ctx, plan, coGames.get(plan.id), existingProducts, fazerGames);
 
       // Sincronización de Combos para Central One (Blood Strike y Free Fire LATAM)
@@ -2566,7 +2802,33 @@ export async function runCentralOneSync(opts: {
           timestamp: ctx.timestamp,
         });
         for (const id of plannedCo.seenIds) seenProducts.add(id);
-        if (isFF) seenProducts.add(`${plan.id}--nivel-completo`);
+        if (isFF) {
+          const levelComboId = `${plan.id}--nivel-completo`;
+          seenProducts.add(levelComboId);
+          const plannedLevelCombo = planFreeFireLevelUpCombo({
+            plan,
+            existingProduct: existingProducts.get(levelComboId),
+            pricing: { marginPercent: ctx.marginPercent, roundToUsd: ctx.roundToUsd },
+            timestamp: ctx.timestamp,
+          });
+          if (plannedLevelCombo) {
+            const current = existingProducts.get(levelComboId);
+            if (!current) {
+              ctx.writer.set(products().doc(levelComboId), plannedLevelCombo, false);
+              ctx.summary.productsCreated += 1;
+            } else {
+              const patch = changedPatch(current, plannedLevelCombo);
+              if (Object.keys(patch).length > 0) {
+                ctx.writer.set(products().doc(levelComboId), {
+                  ...patch,
+                  providerSyncedAt: ctx.timestamp,
+                  updatedAt: ctx.timestamp,
+                });
+                ctx.summary.productsUpdated += 1;
+              }
+            }
+          }
+        }
         for (const combo of plannedCo.combos) {
           const id = combo.id as string;
           const current = existingProducts.get(id);
@@ -2620,8 +2882,14 @@ export async function runCentralOneSync(opts: {
       if (!current || seenProducts.has(id)) continue;
       seenProducts.add(id);
       if (current.provider !== 'centralone' || protectedGames.has(String(current.gameId ?? ''))) continue;
-      if (current.active === false && current.stock === 0) continue;
-      ctx.writer.set(products().doc(id), { active: false, stock: 0, updatedAt: ctx.timestamp });
+      if (current.active === false && current.stock === 0 && current.inStock === false) continue;
+      ctx.writer.set(products().doc(id), {
+        active: false,
+        stock: 0,
+        inStock: false,
+        availability: 'out_of_stock',
+        updatedAt: ctx.timestamp,
+      });
       summary.productsUpdated += 1;
       await ctx.writer.maybeFlush();
     }
