@@ -47,6 +47,7 @@ import * as stats from './stats';
 import * as usersService from './users';
 import { addEvent } from './orderEvents';
 import { getConfig } from './settings';
+import * as bankLedgerService from './bankLedger';
 import { buildManualOrderUrl } from './whatsapp';
 import { buildCallPlan } from './dispatch';
 import { resolveWebUserForWhatsappOrder } from './whatsappSync';
@@ -1315,6 +1316,28 @@ export async function verifyPayment(
       { merge: true }
     );
 
+    if (!esBinancePay && order.payment.method !== 'wallet') {
+      try {
+        await bankLedgerService.recordInflow({
+          bankSnapshot: order.payment.bankSnapshot,
+          fallbackBank: config.bank,
+          paymentMethod: order.payment.method,
+          amountBs: abonado,
+          source: order.payment.method === 'transfer' ? 'manual_transfer' : 'web',
+          orderId,
+          orderCode: order.code,
+          reference,
+          note: 'Abono parcial verificado por Pabilo',
+          createdBy: 'system:pabilo',
+        });
+      } catch (err) {
+        log.warn('No se pudo registrar abono parcial en bankLedger', {
+          orderId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     const mensaje =
       `Recibimos ${esBinancePay ? `${result.reportedAmount!.toFixed(2)} USDT` : `${abonado.toFixed(2)} Bs`} de esa referencia. La orden es de ` +
       `${order.pricing.totalBs.toFixed(2)} Bs, así que faltan ${faltanBs.toFixed(2)} Bs. ` +
@@ -1568,6 +1591,29 @@ export async function verifyPayment(
       },
       { merge: true }
     );
+
+    if (!esBinancePay && order.payment.method !== 'wallet') {
+      const verifiedBsThisRef = reportedAmountBs !== null ? reportedAmountBs : pendienteBs;
+      try {
+        await bankLedgerService.recordInflow({
+          bankSnapshot: order.payment.bankSnapshot,
+          fallbackBank: config.bank,
+          paymentMethod: order.payment.method,
+          amountBs: verifiedBsThisRef,
+          source: order.payment.method === 'transfer' ? 'manual_transfer' : 'web',
+          orderId,
+          orderCode: order.code,
+          reference,
+          note: surplusBs > 0 ? `Incluye sobrepago de ${surplusBs.toFixed(2)} Bs` : null,
+          createdBy: 'system:pabilo',
+        });
+      } catch (err) {
+        log.warn('No se pudo registrar ingreso verificado en bankLedger', {
+          orderId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     const paymentVerifiedMessage = reconciledDuplicate
       ? 'Pago verificado exitosamente mediante conciliación automática de reintento.'

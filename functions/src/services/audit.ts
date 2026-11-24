@@ -100,4 +100,6 @@ export const ACTIONS = {
   CENTRAL_ONE_WEBHOOK_TESTED: 'centralone.webhook.tested',
   SETUP_ADMIN_GRANTED: 'setup.admin.granted',
   ADMIN_EMAIL_CHANGED: 'admin.email.changed',
+  BANK_LEDGER_WITHDRAWAL_CREATED: 'bank_ledger.withdrawal.created',
+  BANK_LEDGER_WITHDRAWAL_DELETED: 'bank_ledger.withdrawal.deleted',
 } as const;

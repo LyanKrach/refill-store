@@ -38,6 +38,7 @@ import { AdminAlerts } from '@/pages/admin/AdminAlerts';
 import { AdminPushNotifications } from '@/pages/admin/AdminPushNotifications';
 
 import { AdminChatbotPage } from '@/pages/admin/AdminChatbotPage';
+import { AdminBankLedger } from '@/pages/admin/AdminBankLedger';
 import { AccountDeletionPage, PrivacyPolicyPage } from '@/pages/PrivacyPolicyPage';
 
 export function App() {
@@ -173,6 +174,14 @@ export function App() {
           <Route path="modales" element={<AdminModals />} />
           <Route path="niveles" element={<AdminTiers />} />
           <Route path="chatbot" element={<AdminChatbotPage />} />
+          <Route
+            path="caja-bs"
+            element={
+              <RequireAdmin>
+                <AdminBankLedger />
+              </RequireAdmin>
+            }
+          />
           <Route path="configuracion" element={<AdminSettings />} />
           <Route path="bitacora" element={<AdminLogs />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />

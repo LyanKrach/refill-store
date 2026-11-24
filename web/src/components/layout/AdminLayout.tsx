@@ -7,6 +7,7 @@ import {
   Gamepad2,
   Gem,
   GraduationCap,
+  Landmark,
   Sparkles,
   LayoutDashboard,
   LifeBuoy,
@@ -30,6 +31,7 @@ import { cn, initials } from '@/lib/utils';
 const NAV = [
   { to: ROUTES.admin, label: 'Resumen', icon: LayoutDashboard, end: true },
   { to: ROUTES.adminOrders, label: 'Órdenes', icon: Receipt, end: false },
+  { to: ROUTES.adminBankLedger, label: 'Caja Bs (Cuentas)', icon: Landmark, end: false },
   { to: ROUTES.adminAlerts, label: 'Avisos', icon: BellRing, end: false },
   { to: ROUTES.adminPushNotifications, label: 'Notificaciones push', icon: Send, end: false },
   { to: ROUTES.adminProducts, label: 'Productos', icon: Package, end: false },
@@ -56,7 +58,10 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
     <ul className="space-y-1">
       {NAV.map((item) => {
         // La bitácora, configuración y push global son sólo para administradores.
-        const adminOnly = item.to === ROUTES.adminLogs || item.to === ROUTES.adminPushNotifications;
+        const adminOnly =
+          item.to === ROUTES.adminLogs ||
+          item.to === ROUTES.adminPushNotifications ||
+          item.to === ROUTES.adminBankLedger;
         if (adminOnly && !isAdmin) return null;
 
         const badge = item.to === ROUTES.adminAlerts && unread > 0 ? unread : null;

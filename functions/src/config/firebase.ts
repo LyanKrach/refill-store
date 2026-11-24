@@ -57,6 +57,8 @@ export const COLLECTIONS = {
    * doc `queued` dispara `runCentralOneSync` (trigger de Firestore, 9 min).
    */
   providerSync: 'providerSync',
+  /** Movimientos de caja en Bs por cuenta bancaria (ingresos verificados y retiros). */
+  bankLedger: 'bankLedger',
 } as const;
 
 export const CONFIG_DOC_ID = 'app';
@@ -80,6 +82,7 @@ export const sessions = () => db.collection(COLLECTIONS.sessions);
 export const playerIdCache = () => db.collection(COLLECTIONS.playerIdCache);
 export const providerWebhookEvents = () => db.collection(COLLECTIONS.providerWebhookEvents);
 export const providerSync = () => db.collection(COLLECTIONS.providerSync);
+export const bankLedger = () => db.collection(COLLECTIONS.bankLedger);
 export const configDoc = () => db.collection(COLLECTIONS.config).doc(CONFIG_DOC_ID);
 /** Configuración privada que no se expone por las reglas públicas de Firestore. */
 export const privateChatbotConfigDoc = () => db.collection('privateConfig').doc('chatbot');

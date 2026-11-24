@@ -12,6 +12,8 @@ import type {
   AdminOverview,
   AppConfig,
   AuditLog,
+  BankLedgerEntry,
+  BankLedgerQueryResult,
   Coupon,
   Game,
   Order,
@@ -1016,6 +1018,61 @@ export function useDeleteModal() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.adminModals });
       void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.modals });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Control de Caja en Bs por Cuenta Bancaria (`bankLedger`)
+// ---------------------------------------------------------------------------
+
+export function useAdminBankLedger(filters: {
+  accountKey?: string;
+  from?: string;
+  to?: string;
+}) {
+  const params = new URLSearchParams();
+  if (filters.accountKey) params.set('accountKey', filters.accountKey);
+  if (filters.from) params.set('from', filters.from);
+  if (filters.to) params.set('to', filters.to);
+  const query = params.toString();
+  const suffix = query ? `?${query}` : '';
+
+  return useQuery({
+    queryKey: QUERY_KEYS.adminBankLedger(query || 'default'),
+    queryFn: () => api.get<BankLedgerQueryResult>(`/admin/bank-ledger${suffix}`),
+    staleTime: 15_000,
+  });
+}
+
+export function useCreateBankWithdrawal() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: {
+      accountKey: string;
+      amountBs: number;
+      note: string;
+      reference?: string | null;
+    }) =>
+      api.post<{ entry: BankLedgerEntry; report: BankLedgerQueryResult }>(
+        '/admin/bank-ledger/withdrawals',
+        input
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'bank-ledger'] });
+    },
+  });
+}
+
+export function useDeleteBankWithdrawal() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.delete<{ deleted: boolean; id: string }>(`/admin/bank-ledger/withdrawals/${id}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'bank-ledger'] });
     },
   });
 }

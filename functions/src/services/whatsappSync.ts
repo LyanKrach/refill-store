@@ -34,6 +34,8 @@ import * as tiers from '../lib/tiers';
 import * as stats from './stats';
 import { sendOrderEmail } from './orderEmails';
 import { activeLadder } from './users';
+import { getConfig } from './settings';
+import * as bankLedgerService from './bankLedger';
 import type {
   DispatchCallResult,
   Order,
@@ -106,6 +108,14 @@ export const whatsappSyncPayloadSchema = z.object({
   errorMessage: z.string().nullable().optional(),
   providerError: z.string().nullable().optional(),
   userId: z.string().nullable().optional(),
+  bankSnapshot: z
+    .object({
+      code: z.string().optional(),
+      name: z.string().optional(),
+      idNumber: z.string().optional(),
+      phone: z.string().optional(),
+    })
+    .optional(),
 });
 
 export type WhatsappSyncPayload = z.infer<typeof whatsappSyncPayloadSchema>;
@@ -369,6 +379,28 @@ export async function syncWhatsappOrder(rawInput: unknown): Promise<SyncWhatsapp
   }));
 
   const ladder = await activeLadder();
+  let storeConfig: Awaited<ReturnType<typeof getConfig>> | null = null;
+  try {
+    storeConfig = await getConfig();
+  } catch {
+    storeConfig = null;
+  }
+
+  const resolvedBankSnapshot =
+    input.bankSnapshot && (input.bankSnapshot.idNumber || input.bankSnapshot.phone)
+      ? {
+          code: input.bankSnapshot.code?.trim() || storeConfig?.bank?.code || '0102',
+          name: input.bankSnapshot.name?.trim() || storeConfig?.bank?.name || 'Banco de Venezuela',
+          idNumber: input.bankSnapshot.idNumber?.trim() || storeConfig?.bank?.idNumber || '',
+          phone: input.bankSnapshot.phone?.trim() || storeConfig?.bank?.phone || '',
+        }
+      : {
+          code: storeConfig?.bank?.code || '0102',
+          name: storeConfig?.bank?.name || 'Banco de Venezuela',
+          idNumber: storeConfig?.bank?.idNumber || '',
+          phone: storeConfig?.bank?.phone || '',
+        };
+
   const orderRef = orders().doc(orderId);
   const paymentRefDoc = paymentRefs().doc(cleanRef);
 
@@ -625,12 +657,11 @@ export async function syncWhatsappOrder(rawInput: unknown): Promise<SyncWhatsapp
         verifiedAt: createdAt,
         attempts: 1,
         providerResponse: existing?.payment?.providerResponse ?? { source: 'whatsapp_pabilo' },
-        bankSnapshot: existing?.payment?.bankSnapshot ?? {
-          code: '0102',
-          name: 'Banco de Venezuela',
-          idNumber: '',
-          phone: '',
-        },
+        bankSnapshot:
+          existing?.payment?.bankSnapshot &&
+          (existing.payment.bankSnapshot.idNumber || existing.payment.bankSnapshot.phone)
+            ? existing.payment.bankSnapshot
+            : resolvedBankSnapshot,
       },
       dispatch: {
         calls: dispatchCalls,
@@ -697,8 +728,32 @@ export async function syncWhatsappOrder(rawInput: unknown): Promise<SyncWhatsapp
       matchedUserId: isRegisteredUser && userSnap?.exists ? effectiveUid : null,
       shouldAccountNow,
       computedTier,
+      createdAt,
+      bankSnapshot: orderDoc.payment.bankSnapshot,
     };
   });
+
+  if (montoBs > 0 && cleanRef) {
+    try {
+      await bankLedgerService.recordInflow({
+        bankSnapshot: txOutcome.bankSnapshot,
+        fallbackBank: storeConfig?.bank,
+        paymentMethod: 'pagomovil_bdv',
+        amountBs: montoBs,
+        source: 'whatsapp',
+        orderId,
+        orderCode: txOutcome.savedOrder.code,
+        reference: cleanRef,
+        createdAt: txOutcome.createdAt,
+        createdBy: 'system:whatsapp',
+      });
+    } catch (err) {
+      log.warn('No se pudo registrar ingreso de WhatsApp en bankLedger', {
+        orderId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   if (txOutcome.shouldAccountNow) {
     try {

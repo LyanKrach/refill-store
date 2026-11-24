@@ -374,6 +374,20 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "bankLedger",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "accountKey",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": [

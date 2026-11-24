@@ -40,6 +40,7 @@ export const ROUTES = {
   adminTiers: '/admin/niveles',
   adminSettings: '/admin/configuracion',
   adminChatbot: '/admin/chatbot',
+  adminBankLedger: '/admin/caja-bs',
   adminLogs: '/admin/bitacora',
 } as const;
 
@@ -73,6 +74,7 @@ export const QUERY_KEYS = {
   adminCreators: ['admin', 'creators'] as const,
   adminCreator: (uid: string) => ['admin', 'creator', uid] as const,
   adminConfig: ['admin', 'config'] as const,
+  adminBankLedger: (filters: string) => ['admin', 'bank-ledger', filters] as const,
   adminLogs: (filters: string) => ['admin', 'logs', filters] as const,
   adminTickets: (status?: string) => ['admin', 'tickets', status ?? 'all'] as const,
   adminRateHistory: ['admin', 'rate-history'] as const,

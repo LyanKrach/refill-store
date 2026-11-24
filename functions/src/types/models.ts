@@ -1335,3 +1335,57 @@ export interface CentralOnePrivateState {
   /** Último aviso del webhook recibido (se escribe como mucho una vez por minuto). */
   lastWebhookAt?: TimestampLike | null;
 }
+
+// ---------------------------------------------------------------------------
+// Control de Caja en Bs por Cuenta Bancaria (`bankLedger`)
+// ---------------------------------------------------------------------------
+
+export type BankLedgerType = 'inflow' | 'withdrawal';
+
+export type BankLedgerSource = 'web' | 'whatsapp' | 'manual_transfer' | 'withdrawal';
+
+export interface BankLedgerEntry {
+  id: string;
+  type: BankLedgerType;
+  accountKey: string;
+  bankCode: string;
+  bankName: string;
+  cedula: string;
+  phone: string;
+  amountBs: number;
+  source: BankLedgerSource;
+  orderId: string | null;
+  orderCode: string | null;
+  reference: string | null;
+  note: string | null;
+  createdAt: TimestampLike;
+  createdBy: string | null;
+}
+
+export interface BankLedgerAccountSummary {
+  accountKey: string;
+  bankCode: string;
+  bankName: string;
+  cedula: string;
+  phone: string;
+  label: string;
+  isActive: boolean;
+  totalInflowBs: number;
+  totalWithdrawalBs: number;
+  netBalanceBs: number;
+  todayInflowBs: number;
+  webInflowCount: number;
+  whatsappInflowCount: number;
+  manualTransferInflowCount: number;
+  withdrawalCount: number;
+}
+
+export interface BankLedgerQueryResult {
+  activeAccountKey: string;
+  selectedAccountKey: string;
+  accounts: BankLedgerAccountSummary[];
+  summary: BankLedgerAccountSummary;
+  filteredInflowBs: number;
+  filteredWithdrawalBs: number;
+  movements: BankLedgerEntry[];
+}

@@ -49,6 +49,7 @@ import { enqueueCentralOneSync, recordDeletedGame, unrecordDeletedGame } from '.
 import { listEvents } from '../services/orderEvents';
 import { getConfig, updateConfig } from '../services/settings';
 import * as settings from '../services/settings';
+import * as bankLedgerService from '../services/bankLedger';
 import { seedCatalog } from '../seed/catalog.seed';
 import * as alertsService from '../services/adminAlerts';
 import * as emailService from '../services/email';
@@ -2811,6 +2812,96 @@ adminRouter.post(
     const firebaseUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filePath)}?alt=media&token=${downloadToken}`;
 
     ok(res, { url: publicUrl, firebaseUrl, path: filePath });
+  })
+);
+
+// ===========================================================================
+// Control de Caja en Bs por Cuenta Bancaria (`bankLedger`)
+// ===========================================================================
+
+const bankLedgerQuerySchema = z.object({
+  accountKey: z.string().trim().min(3).max(80).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+const createWithdrawalSchema = z.object({
+  accountKey: z.string().trim().min(3).max(80),
+  amountBs: z.coerce.number().positive(),
+  note: z.string().trim().min(1).max(300),
+  reference: z.string().trim().max(60).optional().nullable(),
+});
+
+adminRouter.get(
+  '/bank-ledger',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const query = parseQuery(req, bankLedgerQuerySchema);
+    const report = await bankLedgerService.getLedgerReport(query);
+    ok(res, report);
+  })
+);
+
+adminRouter.post(
+  '/bank-ledger/withdrawals',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const body = parseBody(req, createWithdrawalSchema);
+    const actor = currentUser(req);
+    const entry = await bankLedgerService.recordWithdrawal({
+      accountKey: body.accountKey,
+      amountBs: body.amountBs,
+      note: body.note,
+      reference: body.reference ?? null,
+      createdBy: actor.email || actor.uid,
+    });
+
+    await audit.record({
+      action: audit.ACTIONS.BANK_LEDGER_WITHDRAWAL_CREATED,
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      targetType: 'bankLedger',
+      targetId: entry.id,
+      summary: `Retiro de ${entry.amountBs.toFixed(2)} Bs registrado en ${entry.accountKey}: ${entry.note}.`,
+      data: {
+        accountKey: entry.accountKey,
+        amountBs: entry.amountBs,
+        reference: entry.reference,
+        note: entry.note,
+      },
+      ip: clientIp(req),
+    });
+
+    const report = await bankLedgerService.getLedgerReport({ accountKey: entry.accountKey });
+    ok(res, { entry, report });
+  })
+);
+
+adminRouter.delete(
+  '/bank-ledger/withdrawals/:id',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { id } = parseParams(req, idParam);
+    const actor = currentUser(req);
+    const deleted = await bankLedgerService.deleteWithdrawal(id);
+
+    await audit.record({
+      action: audit.ACTIONS.BANK_LEDGER_WITHDRAWAL_DELETED,
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      targetType: 'bankLedger',
+      targetId: deleted.id,
+      summary: `Retiro de ${deleted.amountBs.toFixed(2)} Bs eliminado en ${deleted.accountKey}.`,
+      data: {
+        accountKey: deleted.accountKey,
+        amountBs: deleted.amountBs,
+        reference: deleted.reference,
+        note: deleted.note,
+      },
+      ip: clientIp(req),
+    });
+
+    ok(res, { deleted: true, id: deleted.id });
   })
 );
 
