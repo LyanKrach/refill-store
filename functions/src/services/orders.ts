@@ -267,9 +267,54 @@ export interface CreateOrderInput {
   contactPhone?: string | null;
   /** Descontar del saldo a favor lo que alcance. */
   useWallet?: boolean;
+  /** Monto personalizado a aplicar desde RefillCoins (si se omite, aplica el máximo posible). */
+  walletAmountUsd?: number;
   customerNote?: string | null;
   ip: string | null;
   userAgent: string | null;
+}
+
+/**
+ * Calcula en servidor cuánto saldo en RefillCoins se aplica y cuánto queda pendiente.
+ * Siempre acota contra el saldo real del usuario y el total de la orden.
+ */
+export function computeWalletSplit(params: {
+  useWallet: boolean;
+  walletEnabled: boolean;
+  walletBalanceUsd: number;
+  totalUsd: number;
+  walletAmountUsd?: number;
+}): { walletAppliedUsd: number; amountDueUsd: number; paidWithWallet: boolean } {
+  const orderTotal = Math.max(0, round(params.totalUsd, 4));
+  const roundedOrderTotal = round(orderTotal, 2);
+
+  if (!params.useWallet || !params.walletEnabled) {
+    return {
+      walletAppliedUsd: 0,
+      amountDueUsd: roundedOrderTotal,
+      paidWithWallet: false,
+    };
+  }
+
+  const balance = Math.max(0, round(params.walletBalanceUsd, 2));
+  const requested =
+    params.walletAmountUsd === undefined
+      ? Math.min(balance, orderTotal)
+      : Math.min(Math.max(0, round(params.walletAmountUsd, 2)), balance, orderTotal);
+
+  let walletAppliedUsd = Math.max(0, round(requested, 2));
+  const rawDueUsd = round(Math.max(0, orderTotal - walletAppliedUsd), 4);
+  let amountDueUsd = round(rawDueUsd, 2);
+
+  // Un resto de céntimos no se puede transferir ni verificar contra el banco:
+  // si el saldo casi cubre el total y alcanza, se cubre entero.
+  if (rawDueUsd > 0 && rawDueUsd < 0.01 && roundedOrderTotal <= balance) {
+    walletAppliedUsd = roundedOrderTotal;
+    amountDueUsd = 0;
+  }
+
+  const paidWithWallet = walletAppliedUsd > 0 && amountDueUsd === 0;
+  return { walletAppliedUsd, amountDueUsd, paidWithWallet };
 }
 
 /**
@@ -432,70 +477,7 @@ export async function createOrder(
   const rate = config.rate.value;
   const costUsd = round(product.costUsd * quantity, 4);
 
-  // --- Saldo a favor ---
-  // El débito ocurre AHORA, en una transacción sobre el perfil: si se dejara
-  // para el momento del pago, dos compras simultáneas gastarían el mismo saldo.
-  // Si la orden se cancela o caduca, se devuelve.
-  const walletRequested =
-    input.useWallet && config.checkout.walletEnabled !== false
-      ? Math.min(round(profile.walletBalanceUsd, 2), totalUsd)
-      : 0;
-
-  let walletAppliedUsd = Math.max(0, round(walletRequested, 2));
-  // Un resto de céntimos no se puede transferir ni verificar contra el banco:
-  // si el saldo casi cubre el total, se cubre entero.
-  let amountDueUsd = round(totalUsd - walletAppliedUsd, 4);
-  if (amountDueUsd > 0 && amountDueUsd < 0.01) {
-    walletAppliedUsd = totalUsd;
-    amountDueUsd = 0;
-  }
-
-  const paidWithWallet = walletAppliedUsd > 0 && amountDueUsd === 0;
-
-  const paymentMethod: PaymentMethod = paidWithWallet
-    ? 'wallet'
-    : wantsTransfer
-      ? 'transfer'
-      : wantsBinancePay
-        ? 'binance_pay'
-        : 'pagomovil_bdv';
-
-  /** Congela los datos que se le muestran al cliente para este método. */
-  const bankSnapshot = () =>
-    paymentMethod === 'transfer'
-      ? {
-          code: config.transfer.code,
-          name: config.transfer.name,
-          idNumber: config.transfer.idNumber,
-          // El Pago Móvil no aplica aquí, pero el campo existe en el modelo.
-          phone: '',
-          accountNumber: config.transfer.accountNumber,
-          accountType: config.transfer.accountType,
-        }
-      : paymentMethod === 'binance_pay'
-        ? { code: '', name: 'Binance Pay', idNumber: '', phone: '', binancePayId: config.binancePay.payId }
-        : {
-          code: config.bank.code,
-          name: config.bank.name,
-          idNumber: config.bank.idNumber,
-          phone: config.bank.phone,
-        };
-
-  const totalBs = usdToBs(amountDueUsd, rate, config.pricing.roundToBs);
-
-  const orderRef = orders().doc();
-  const timestamp = now();
-
-  if (walletAppliedUsd > 0) {
-    // Lanza si el saldo ya no alcanza (otra compra lo consumió mientras tanto).
-    await usersService.moveWallet({
-      uid: user.uid,
-      deltaUsd: -walletAppliedUsd,
-      reason: `Pago de la orden ${product.name}`,
-      orderId: orderRef.id,
-    });
-  }
-
+  // --- Preparación del plan y orden ---
   // Los datos que pide Central One (`targetFields`) se congelan en el plan: del
   // call si los trae, si no del producto. El PATCH del panel reemplaza `calls`
   // entero y podía dejarlos fuera; la copia del producto es la que sobrevive.
@@ -529,98 +511,210 @@ export async function createOrder(
     }
   }
 
-  const order: Omit<Order, 'id'> = {
-    code: generateOrderCode(),
-    uid: user.uid,
-    userId: user.uid,
-    canal: 'WEB',
-    origen: 'WEB',
-    clienteContacto: contactPhone ?? user.email ?? '',
-    juego: game.name,
-    paqueteNombre: product.name,
-    productIds,
-    montoBs: totalBs,
-    tasaBcv: rate,
-    montoUsd: totalUsd,
-    costoProveedorUsd: costUsd,
-    gananciaNetaUsd: round(totalUsd - costUsd, 4),
-    tipoDespacho: product.fulfillment === 'auto' ? 'AUTOMATICO' : 'MANUAL',
-    ...(paidWithWallet
-      ? { estado: product.fulfillment === 'auto' ? 'PAGO_VALIDADO' : 'REVISION_MANUAL' }
-      : {}),
-    subOrdenes: [],
-    user: {
-      email: user.email,
-      displayName: profile.displayName ?? user.displayName,
-      photoURL: profile.photoURL ?? user.photoURL,
-    },
-    gameId: game.id,
-    gameName: game.name,
-    providerGameId: game.apiGameId,
-    // Queda congelado: cambiar de proveedor mañana no altera una compra ya pagada.
-    provider: product.provider ?? game.provider ?? 'inefable',
-    providerFamily: game.providerFamily ?? 'topup',
-    productId: product.id,
-    productName: product.name,
-    productSku: product.sku,
-    productAmount: product.amount,
-    productBonus: product.bonus,
-    fulfillment: product.fulfillment,
-    playerId: playerData.playerId,
-    playerId2: playerData.playerId2,
-    playerNickname,
-    playerFields: playerData.values,
-    pricing: {
-      unitUsd,
-      quantity,
-      subtotalUsd,
-      discountUsd,
-      totalUsd,
-      walletAppliedUsd,
-      amountDueUsd,
-      rate,
-      totalBs,
-      couponCode,
-      creatorCode: creatorRef?.code ?? null,
-      costUsd,
-      profitUsd: round(totalUsd - costUsd, 4),
-    },
-    creator: creatorRef,
-    contactPhone,
-    emailsSent: [],
-    payment: {
-      method: paymentMethod,
-      reference: null,
-      reportedAmountBs: null,
-      partials: [],
-      paidBs: 0,
-      verifiedAt: paidWithWallet ? timestamp : null,
-      attempts: 0,
-      providerResponse: null,
-      bankSnapshot: bankSnapshot(),
-    },
-    dispatch: {
-      // El plan se calcula ahora y se guarda en la orden: si el admin edita el
-      // producto más tarde, esta orden conserva las llamadas que se cotizaron
-      // al comprar. Con cantidad > 1 el plan completo se repite.
-      calls: plannedCalls,
-      startedAt: null,
-      completedAt: null,
-      lastError: null,
-    },
-    whatsappUrl: null,
-    // Pagada con saldo: no hay transferencia que verificar, así que entra
-    // directamente en la cola de entrega.
-    status: paidWithWallet ? 'paid' : 'awaiting_payment',
-    customerNote: input.customerNote?.slice(0, 300) ?? null,
-    adminNote: null,
-    meta: { ip: input.ip, userAgent: input.userAgent },
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    expiresAt: minutesFromNow(config.checkout.orderExpiryMinutes),
+  const orderRef = orders().doc();
+  const orderCode = generateOrderCode();
+  const timestamp = now();
+  const expiresAt = minutesFromNow(config.checkout.orderExpiryMinutes);
+
+  const buildOrderPayload = (split: {
+    walletAppliedUsd: number;
+    amountDueUsd: number;
+    paidWithWallet: boolean;
+  }): { order: Omit<Order, 'id'>; totalBs: number } => {
+    const paymentMethod: PaymentMethod = split.paidWithWallet
+      ? 'wallet'
+      : wantsTransfer
+        ? 'transfer'
+        : wantsBinancePay
+          ? 'binance_pay'
+          : 'pagomovil_bdv';
+
+    /** Congela los datos que se le muestran al cliente para este método. */
+    const bankSnapshot = () =>
+      paymentMethod === 'transfer'
+        ? {
+            code: config.transfer.code,
+            name: config.transfer.name,
+            idNumber: config.transfer.idNumber,
+            // El Pago Móvil no aplica aquí, pero el campo existe en el modelo.
+            phone: '',
+            accountNumber: config.transfer.accountNumber,
+            accountType: config.transfer.accountType,
+          }
+        : paymentMethod === 'binance_pay'
+          ? { code: '', name: 'Binance Pay', idNumber: '', phone: '', binancePayId: config.binancePay.payId }
+          : {
+              code: config.bank.code,
+              name: config.bank.name,
+              idNumber: config.bank.idNumber,
+              phone: config.bank.phone,
+            };
+
+    const totalBs = usdToBs(split.amountDueUsd, rate, config.pricing.roundToBs);
+
+    const order: Omit<Order, 'id'> = {
+      code: orderCode,
+      uid: user.uid,
+      userId: user.uid,
+      canal: 'WEB',
+      origen: 'WEB',
+      clienteContacto: contactPhone ?? user.email ?? '',
+      juego: game.name,
+      paqueteNombre: product.name,
+      productIds,
+      montoBs: totalBs,
+      tasaBcv: rate,
+      montoUsd: totalUsd,
+      costoProveedorUsd: costUsd,
+      gananciaNetaUsd: round(totalUsd - costUsd, 4),
+      tipoDespacho: product.fulfillment === 'auto' ? 'AUTOMATICO' : 'MANUAL',
+      ...(split.paidWithWallet
+        ? { estado: product.fulfillment === 'auto' ? 'PAGO_VALIDADO' : 'REVISION_MANUAL' }
+        : {}),
+      subOrdenes: [],
+      user: {
+        email: user.email,
+        displayName: profile.displayName ?? user.displayName,
+        photoURL: profile.photoURL ?? user.photoURL,
+      },
+      gameId: game.id,
+      gameName: game.name,
+      providerGameId: game.apiGameId,
+      // Queda congelado: cambiar de proveedor mañana no altera una compra ya pagada.
+      provider: product.provider ?? game.provider ?? 'inefable',
+      providerFamily: game.providerFamily ?? 'topup',
+      productId: product.id,
+      productName: product.name,
+      productSku: product.sku,
+      productAmount: product.amount,
+      productBonus: product.bonus,
+      fulfillment: product.fulfillment,
+      playerId: playerData.playerId,
+      playerId2: playerData.playerId2,
+      playerNickname,
+      playerFields: playerData.values,
+      pricing: {
+        unitUsd,
+        quantity,
+        subtotalUsd,
+        discountUsd,
+        totalUsd,
+        walletAppliedUsd: split.walletAppliedUsd,
+        amountDueUsd: split.amountDueUsd,
+        rate,
+        totalBs,
+        couponCode,
+        creatorCode: creatorRef?.code ?? null,
+        costUsd,
+        profitUsd: round(totalUsd - costUsd, 4),
+      },
+      creator: creatorRef,
+      contactPhone,
+      emailsSent: [],
+      payment: {
+        method: paymentMethod,
+        reference: null,
+        reportedAmountBs: null,
+        partials: [],
+        paidBs: 0,
+        verifiedAt: split.paidWithWallet ? timestamp : null,
+        attempts: 0,
+        providerResponse: null,
+        bankSnapshot: bankSnapshot(),
+      },
+      dispatch: {
+        // El plan se calcula ahora y se guarda en la orden: si el admin edita el
+        // producto más tarde, esta orden conserva las llamadas que se cotizaron
+        // al comprar. Con cantidad > 1 el plan completo se repite.
+        calls: plannedCalls,
+        startedAt: null,
+        completedAt: null,
+        lastError: null,
+      },
+      whatsappUrl: null,
+      // Pagada con saldo: no hay transferencia que verificar, así que entra
+      // directamente en la cola de entrega.
+      status: split.paidWithWallet ? 'paid' : 'awaiting_payment',
+      customerNote: input.customerNote?.slice(0, 300) ?? null,
+      adminNote: null,
+      meta: { ip: input.ip, userAgent: input.userAgent },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      expiresAt,
+    };
+
+    return { order, totalBs };
   };
 
-  await orderRef.set(order);
+  // --- Saldo a favor + creación atómica ---
+  // Cuando el cliente solicita aplicar saldo, la lectura del saldo vivo, el
+  // débito y la escritura de la orden ocurren dentro de la MISMA transacción de
+  // Firestore: así es imposible descontar saldo sin crear la orden o gastar dos
+  // veces el mismo dinero en peticiones concurrentes.
+  const walletEnabled = config.checkout.walletEnabled !== false;
+  let order: Omit<Order, 'id'>;
+  let walletAppliedUsd = 0;
+  let paidWithWallet = false;
+  let totalBs = 0;
+
+  if (input.useWallet && walletEnabled) {
+    const movementId = `order_${orderRef.id}`;
+    const txOutcome = await db.runTransaction(async (tx) => {
+      const walletState = await usersService.readWalletInTx(tx, user.uid, movementId);
+      const liveBalance = walletState.userSnap.exists
+        ? ((walletState.userSnap.data()?.walletBalanceUsd as number | undefined) ?? 0)
+        : (profile.walletBalanceUsd ?? 0);
+
+      const split = computeWalletSplit({
+        useWallet: true,
+        walletEnabled: true,
+        walletBalanceUsd: liveBalance,
+        totalUsd,
+        walletAmountUsd: input.walletAmountUsd,
+      });
+
+      const built = buildOrderPayload(split);
+
+      if (split.walletAppliedUsd > 0) {
+        usersService.writeWalletInTx(tx, walletState, {
+          uid: user.uid,
+          deltaUsd: -split.walletAppliedUsd,
+          reason: `Pago de la orden ${product.name}`,
+          orderId: orderRef.id,
+          orderCode,
+          movementId,
+        });
+      }
+
+      tx.set(orderRef, built.order);
+
+      return {
+        order: built.order,
+        totalBs: built.totalBs,
+        walletAppliedUsd: split.walletAppliedUsd,
+        paidWithWallet: split.paidWithWallet,
+      };
+    });
+
+    order = txOutcome.order;
+    totalBs = txOutcome.totalBs;
+    walletAppliedUsd = txOutcome.walletAppliedUsd;
+    paidWithWallet = txOutcome.paidWithWallet;
+  } else {
+    const split = computeWalletSplit({
+      useWallet: false,
+      walletEnabled,
+      walletBalanceUsd: profile.walletBalanceUsd ?? 0,
+      totalUsd,
+      walletAmountUsd: input.walletAmountUsd,
+    });
+    const built = buildOrderPayload(split);
+    order = built.order;
+    totalBs = built.totalBs;
+    walletAppliedUsd = split.walletAppliedUsd;
+    paidWithWallet = split.paidWithWallet;
+    await orderRef.set(order);
+  }
 
   await Promise.all([
     addEvent({

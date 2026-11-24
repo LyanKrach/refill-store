@@ -27,7 +27,8 @@ import toast from 'react-hot-toast';
 import { api, isFazerCardsStorefront, ApiError } from '@/lib/api';
 import { useCatalog, useFamilyCatalog, useGameCatalog } from '@/hooks/useCatalog';
 import { usePricePreview } from '@/hooks/useOrders';
-import { useSavedPlayerIds } from '@/hooks/useAccount';
+import { useSavedPlayerIds, useWallet } from '@/hooks/useAccount';
+import { WalletMixControl } from '@/features/checkout/WalletMixControl';
 import { useDocumentTitle } from '@/hooks/useMisc';
 import { useAuth } from '@/providers/AuthProvider';
 import { useConfig } from '@/providers/ConfigProvider';
@@ -106,6 +107,7 @@ export function GamePage() {
   const family = catalog.data?.game?.providerFamily ?? 'topup';
   const familyCatalog = useFamilyCatalog(catalog.data?.game ? family : undefined, 12, carouselStarted);
   const savedIds = useSavedPlayerIds();
+  const wallet = useWallet();
   const pricePreview = usePricePreview();
 
   const [playerValues, setPlayerValues] = useState<Record<string, string>>({});
@@ -117,6 +119,8 @@ export function GamePage() {
   const [creatorCode, setCreatorCode] = useState(() => readCreatorCode());
   const [codesOpen, setCodesOpen] = useState(false);
   const [preview, setPreview] = useState<PricePreview | null>(null);
+  const [useWalletChecked, setUseWalletChecked] = useState(false);
+  const [walletAmountUsd, setWalletAmountUsd] = useState<number | undefined>(undefined);
   const [helpOpen, setHelpOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [playerValidation, setPlayerValidation] = useState<{
@@ -382,6 +386,8 @@ export function GamePage() {
           // Sólo cuando el ID está completo: así el cupón se valida contra esa
           // cuenta del juego antes de llegar al pago.
           playerId: idIsValid && primaryField ? (playerValues[primaryField.key] ?? null) : null,
+          useWallet: useWalletChecked,
+          ...(useWalletChecked && walletAmountUsd !== undefined ? { walletAmountUsd } : {}),
         },
         { onSuccess: setPreview }
       );
@@ -389,7 +395,7 @@ export function GamePage() {
 
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, selected?.id, quantity, couponCode, creatorCode, idIsValid, playerValues]);
+  }, [user, selected?.id, quantity, couponCode, creatorCode, idIsValid, playerValues, useWalletChecked, walletAmountUsd]);
 
   // La guía interactiva avanza sola tras 800ms cuando el cliente verifica su ID.
   useEffect(() => {
@@ -452,6 +458,8 @@ export function GamePage() {
         quantity,
         couponCode: couponCode.trim() || null,
         creatorCode: creatorCode.trim() || null,
+        useWallet: useWalletChecked,
+        ...(useWalletChecked && walletAmountUsd !== undefined ? { walletAmountUsd } : {}),
       },
     });
   };
@@ -891,6 +899,20 @@ export function GamePage() {
           )}
         </section>
 
+        {user && selected && (
+          <WalletMixControl
+            className="mt-4"
+            walletEnabled={wallet.data?.enabled ?? false}
+            walletBalanceUsd={wallet.data?.balanceUsd ?? 0}
+            orderTotalUsd={preview?.totalUsd ?? selected.priceUsd * quantity}
+            useWallet={useWalletChecked}
+            onUseWalletChange={setUseWalletChecked}
+            walletAmountUsd={walletAmountUsd}
+            onWalletAmountUsdChange={setWalletAmountUsd}
+            amountDueUsd={preview?.amountDueUsd}
+          />
+        )}
+
         {preview && preview.tierPercent > 0 && (
           <p className="mt-3 flex items-center gap-1.5 text-xs text-emerald-300">
             <Sparkles className="h-3.5 w-3.5" aria-hidden />
@@ -911,7 +933,7 @@ export function GamePage() {
         quantity={quantity}
         onQuantityChange={setQuantity}
         totalBs={preview?.totalBs ?? null}
-        totalUsd={preview?.totalUsd ?? null}
+        totalUsd={preview?.amountDueUsd ?? preview?.totalUsd ?? null}
         discountUsd={preview?.discountUsd ?? 0}
         onContinue={goToPayment}
         loading={false}

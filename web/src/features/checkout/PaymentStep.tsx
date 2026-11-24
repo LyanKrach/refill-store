@@ -124,8 +124,10 @@ export function PaymentStep({
   // Ya abonó algo y falta la diferencia: hay que decírselo con todas las
   // letras, o va a transferir el total otra vez.
   const hayParcial = (paidBs ?? 0) > 0;
-  // RefillCoins no se ofrece con un pago parcial: ese abono ya está en el banco.
-  const showWallet = walletEnabled && !hayParcial;
+  const isMixedWallet = walletAppliedUsd > 0 && amountUsd > 0;
+  // Si ya se aplicaron RefillCoins o hay abono bancario parcial, el saldo
+  // restante se paga con Pago Móvil, Transferencia o Binance Pay.
+  const showWallet = walletEnabled && !hayParcial && walletAppliedUsd <= 0;
   const showMethodPicker = transferEnabled || binancePayEnabled || showWallet;
   const coinsActive = showWallet && useCoins;
   const coinsMissingUsd = Math.max(0, amountUsd - walletBalanceUsd);
@@ -139,16 +141,50 @@ export function PaymentStep({
       {/* 1. Cuánto pagar */}
       <div className="card ring-gradient text-center">
         <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-          Monto exacto a pagar
+          {isMixedWallet ? 'Restante a pagar ahora' : 'Monto exacto a pagar'}
         </p>
         <p className="mt-2 text-4xl font-extrabold tabular text-white">
           {coinsActive || isBinancePay ? `${formatUsd(amountUsd)}${isBinancePay ? ' USDT' : ''}` : formatBs(amountBs)}
         </p>
         <p className="mt-1 text-sm tabular text-slate-400">
-          {coinsActive ? 'Se descuenta de tus RefillCoins' : isBinancePay ? 'Importe en Tether (USDT)' : `${formatUsd(amountUsd)} · Tasa ${formatBs(data.payment.rate)}`}
+          {coinsActive
+            ? 'Se descuenta de tus RefillCoins'
+            : isBinancePay
+              ? 'Importe en Tether (USDT)'
+              : `${formatUsd(amountUsd)} · Tasa ${formatBs(data.payment.rate)}`}
         </p>
 
-        {walletAppliedUsd > 0 && (
+        {isMixedWallet ? (
+          <div className="mx-auto mt-4 max-w-sm rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-left text-xs">
+            <dl className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <dt className="text-slate-400">Total de la orden</dt>
+                <dd className="tabular font-medium text-slate-200">
+                  {formatUsd(data.order.pricing.totalUsd)}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <dt className="flex items-center gap-1 text-amber-300">
+                  <Coins className="h-3.5 w-3.5" aria-hidden />
+                  RefillCoins aplicadas
+                </dt>
+                <dd className="tabular font-semibold text-amber-300">
+                  −{formatRefillCoins(walletAppliedUsd)}
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-2 border-t border-amber-500/20 pt-1.5">
+                <dt className="font-semibold text-white">Restante a pagar ahora</dt>
+                <dd className="tabular font-bold text-white">
+                  {formatUsd(amountUsd)} · {isBinancePay ? `${formatUsd(amountUsd)} USDT` : formatBs(amountBs)}
+                </dd>
+              </div>
+            </dl>
+            <p className="mt-2 text-[11px] leading-relaxed text-amber-100/80">
+              Si la orden expira o la cancelas antes de pagar el restante, tus RefillCoins
+              reservadas regresan automáticamente a tu billetera.
+            </p>
+          </div>
+        ) : walletAppliedUsd > 0 && (
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-300">
             <Coins className="h-3.5 w-3.5" aria-hidden />
             Ya se descontaron {formatRefillCoins(walletAppliedUsd)} de tus RefillCoins

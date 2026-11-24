@@ -10,7 +10,7 @@ import { Input, Select } from '@/components/ui/Field';
 import { EmptyState, OrderStatusBadge, Skeleton } from '@/components/ui/Feedback';
 import { LoadMore } from '@/components/common/LoadMore';
 import { ROUTES, ORDER_STATUS_OPTIONS } from '@/lib/constants';
-import { formatBs, formatDateTime, formatUsd } from '@/lib/format';
+import { formatBs, formatDateTime, formatOrderPaymentMethod, formatUsd } from '@/lib/format';
 import { shortOrderItem } from '@/lib/orderItem';
 import { downloadFile } from '@/lib/api';
 import { errorMessage } from '@/lib/utils';
@@ -51,8 +51,15 @@ function OrderRow({ order }: { order: Order }) {
         </div>
 
         <div className="shrink-0 text-right">
-          <p className="text-sm font-bold tabular text-white">{formatBs(order.pricing.totalBs)}</p>
+          <p className="text-sm font-bold tabular text-white">
+            {order.pricing.totalBs > 0 ? formatBs(order.pricing.totalBs) : 'RefillCoins'}
+          </p>
           <p className="text-xs tabular text-slate-500">{formatUsd(order.pricing.totalUsd)}</p>
+          {(order.pricing.walletAppliedUsd ?? 0) > 0 && (
+            <p className="text-[11px] tabular text-amber-300">
+              {formatOrderPaymentMethod(order)}
+            </p>
+          )}
           {order.pricing.profitUsd !== undefined && (
             <p className="text-xs tabular text-emerald-400">
               +{formatUsd(order.pricing.profitUsd)}

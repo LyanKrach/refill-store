@@ -24,6 +24,7 @@ import {
 } from '@/features/catalog/PlayerFields';
 import { useSavedPlayerIds, useDeletePlayerId } from '@/hooks/useAccount';
 import { usePricePreview } from '@/hooks/useOrders';
+import { WalletMixControl } from '@/features/checkout/WalletMixControl';
 import { useAuth } from '@/providers/AuthProvider';
 import { formatBs, formatUsd, formatRefillCoins } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -67,6 +68,12 @@ interface PlayerIdStepProps {
   /** El usuario debe iniciar sesión antes de poder pagar. */
   requiresLogin: boolean;
   onLogin: () => void;
+  walletEnabled: boolean;
+  walletBalanceUsd: number;
+  useWallet: boolean;
+  onUseWalletChange: (next: boolean) => void;
+  walletAmountUsd: number | undefined;
+  onWalletAmountUsdChange: (next: number | undefined) => void;
 }
 
 export function PlayerIdStep({
@@ -84,6 +91,12 @@ export function PlayerIdStep({
   submitting,
   requiresLogin,
   onLogin,
+  walletEnabled,
+  walletBalanceUsd,
+  useWallet,
+  onUseWalletChange,
+  walletAmountUsd,
+  onWalletAmountUsdChange,
 }: PlayerIdStepProps) {
   const { user } = useAuth();
   const [touched, setTouched] = useState(false);
@@ -255,6 +268,8 @@ export function PlayerIdStep({
           couponCode: couponCode.trim() || null,
           creatorCode: readCreatorCode() || null,
           playerId: isValid && primaryField ? (values[primaryField.key] ?? null) : null,
+          useWallet,
+          ...(useWallet && walletAmountUsd !== undefined ? { walletAmountUsd } : {}),
         },
         { onSuccess: setPreview }
       );
@@ -262,7 +277,7 @@ export function PlayerIdStep({
 
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, product.id, couponCode, isValid, values]);
+  }, [user, product.id, couponCode, isValid, values, useWallet, walletAmountUsd]);
 
   const totalBs = preview?.totalBs ?? product.priceBs;
   const totalUsd = preview?.amountDueUsd ?? preview?.totalUsd ?? product.priceUsd;
@@ -504,6 +519,19 @@ export function PlayerIdStep({
         </div>
       )}
 
+      {user && (
+        <WalletMixControl
+          walletEnabled={walletEnabled}
+          walletBalanceUsd={walletBalanceUsd}
+          orderTotalUsd={preview?.totalUsd ?? product.priceUsd}
+          useWallet={useWallet}
+          onUseWalletChange={onUseWalletChange}
+          walletAmountUsd={walletAmountUsd}
+          onWalletAmountUsdChange={onWalletAmountUsdChange}
+          amountDueUsd={preview?.amountDueUsd}
+        />
+      )}
+
       <div className="card">
         <dl className="space-y-2 text-sm">
           <div className="flex items-center justify-between">
@@ -538,13 +566,25 @@ export function PlayerIdStep({
 
           <div className="flex items-center justify-between border-t border-base-600 pt-3">
             <dt className="font-semibold text-white">
-              {preview?.amountDueUsd === 0 ? 'A transferir' : 'Total a pagar'}
+              {preview?.amountDueUsd === 0
+                ? 'Restante a pagar'
+                : preview && preview.walletAppliedUsd > 0
+                  ? 'Restante a pagar'
+                  : 'Total a pagar'}
             </dt>
             <dd className="text-right">
-              <span className="block text-xl font-extrabold tabular text-white">
-                {formatBs(totalBs)}
-              </span>
-              <span className="block text-xs tabular text-slate-400">{formatUsd(totalUsd)}</span>
+              {preview?.amountDueUsd === 0 ? (
+                <span className="block text-sm font-bold text-emerald-400">
+                  Cubre el 100 % de tu orden
+                </span>
+              ) : (
+                <>
+                  <span className="block text-xl font-extrabold tabular text-white">
+                    {formatBs(totalBs)}
+                  </span>
+                  <span className="block text-xs tabular text-slate-400">{formatUsd(totalUsd)}</span>
+                </>
+              )}
             </dd>
           </div>
         </dl>

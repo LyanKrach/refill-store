@@ -40,6 +40,8 @@ interface CheckoutState {
   creatorCode?: string | null;
   playerIdVerified?: boolean;
   playerNickname?: string | null;
+  useWallet?: boolean;
+  walletAmountUsd?: number;
 }
 
 /** Mismo criterio que valida el backend, para avisar antes de enviar. */
@@ -83,6 +85,8 @@ export function CheckoutPage() {
   // perfil para que quien ya lo dejó una vez no lo escriba otra.
   const [contactPhone, setContactPhone] = useState('');
   const [playerNickname, setPlayerNickname] = useState<string | null>(incoming?.playerNickname ?? null);
+  const [useWalletChecked, setUseWalletChecked] = useState(incoming?.useWallet ?? false);
+  const [walletAmountUsd, setWalletAmountUsd] = useState<number | undefined>(incoming?.walletAmountUsd);
 
   const createOrder = useCreateOrder();
   const verifyPayment = useVerifyPayment(orderData?.order.id);
@@ -165,6 +169,8 @@ export function CheckoutPage() {
         // El código del creador viaja desde el enlace, no lo escribe el cliente.
         creatorCode: readCreatorCode() || null,
         contactPhone: needsPhone ? contactPhone.trim() : null,
+        useWallet: useWalletChecked,
+        ...(useWalletChecked && walletAmountUsd !== undefined ? { walletAmountUsd } : {}),
       },
       {
         onSuccess: (data) => {
@@ -193,7 +199,7 @@ export function CheckoutPage() {
 
           // Pagada íntegra con saldo: no hay nada que transferir, se salta el
           // paso de pago y se muestra el resultado.
-          if (data.payment.amountBs <= 0) {
+          if (data.payment.amountBs <= 0 || data.payment.amountUsd <= 0) {
             setFinalOrder(data.order);
             setStep('result');
             toast.success('Pagada con tus RefillCoins.');
@@ -411,6 +417,12 @@ export function CheckoutPage() {
             onLogin={() => {
               void signInWithGoogle().catch((error) => toast.error(errorMessage(error)));
             }}
+            walletEnabled={wallet.data?.enabled ?? false}
+            walletBalanceUsd={wallet.data?.balanceUsd ?? 0}
+            useWallet={useWalletChecked}
+            onUseWalletChange={setUseWalletChecked}
+            walletAmountUsd={walletAmountUsd}
+            onWalletAmountUsdChange={setWalletAmountUsd}
           />
         ))}
 

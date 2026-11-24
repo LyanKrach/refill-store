@@ -134,6 +134,7 @@ export function useCreateOrder() {
       contactPhone?: string | null;
       paymentMethod?: 'pagomovil_bdv' | 'transfer' | 'binance_pay';
       useWallet?: boolean;
+      walletAmountUsd?: number;
     }) => api.post<CreateOrderResponse>('/orders', input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['orders'] });
@@ -179,6 +180,7 @@ export function usePricePreview() {
       contactPhone?: string | null;
       paymentMethod?: 'pagomovil_bdv' | 'transfer' | 'binance_pay';
       useWallet?: boolean;
+      walletAmountUsd?: number;
       /** Permite validar ya el límite del cupón por ID de jugador. */
       playerId?: string | null;
     }) => api.post<PricePreview>('/orders/preview', input),

@@ -37,7 +37,7 @@ import { Switch } from '@/components/ui/Field';
 import { ConfirmDialog } from '@/components/ui/Modal';
 import { FullPageLoader, ErrorState, OrderStatusBadge, Badge } from '@/components/ui/Feedback';
 import { ROUTES } from '@/lib/constants';
-import { formatBs, formatDateTime, formatUsd, formatRefillCoins } from '@/lib/format';
+import { formatBs, formatDateTime, formatOrderPaymentMethod, formatUsd, formatRefillCoins } from '@/lib/format';
 import { describeOrder } from '@/lib/orderItem';
 import { cn, errorMessage, openWhatsapp } from '@/lib/utils';
 import type { Order } from '@/types/models';
@@ -205,7 +205,9 @@ export function AdminOrderDetail() {
             {walletApplied > 0 && (
               <p className="text-xs tabular text-amber-300">
                 RefillCoins aplicadas {formatRefillCoins(walletApplied)}
-                {order.pricing.totalBs === 0 && ' · sin transferencia'}
+                {order.pricing.totalBs > 0
+                  ? ` · Restante ${formatUsd(order.pricing.amountDueUsd ?? Math.max(0, order.pricing.totalUsd - walletApplied))}`
+                  : ' · sin transferencia'}
               </p>
             )}
             {order.pricing.profitUsd !== undefined && (
@@ -408,6 +410,10 @@ export function AdminOrderDetail() {
             <div className="flex justify-between gap-3">
               <dt className="text-slate-400">Intentos</dt>
               <dd className="tabular text-white">{order.payment.attempts}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-400">Método</dt>
+              <dd className="text-right text-white">{formatOrderPaymentMethod(order)}</dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt className="text-slate-400">Banco destino</dt>

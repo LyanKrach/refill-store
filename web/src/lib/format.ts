@@ -346,3 +346,39 @@ export function formatProductBadge(product: {
   }
   return product.badge;
 }
+
+/**
+ * Etiqueta legible del método de pago, incluyendo combinación mixta cuando
+ * parte de la orden se cubrió con RefillCoins y el resto con banco/Binance.
+ */
+export function formatOrderPaymentMethod(order: {
+  payment: { method: string };
+  pricing: {
+    totalUsd: number;
+    walletAppliedUsd?: number;
+    amountDueUsd?: number;
+  };
+}): string {
+  const methodLabel =
+    order.payment.method === 'transfer'
+      ? 'Transferencia'
+      : order.payment.method === 'binance_pay'
+        ? 'Binance Pay'
+        : order.payment.method === 'wallet'
+          ? 'RefillCoins'
+          : 'Pago Móvil';
+
+  const walletApplied = order.pricing.walletAppliedUsd ?? 0;
+  const remainingUsd = Math.max(
+    0,
+    order.pricing.amountDueUsd ?? order.pricing.totalUsd - walletApplied
+  );
+
+  if (walletApplied > 0 && remainingUsd > 0 && order.payment.method !== 'wallet') {
+    return `RefillCoins (${formatUsd(walletApplied)}) + ${methodLabel} (${formatUsd(remainingUsd)})`;
+  }
+  if (order.payment.method === 'wallet' || (walletApplied > 0 && remainingUsd <= 0)) {
+    return 'RefillCoins';
+  }
+  return methodLabel;
+}

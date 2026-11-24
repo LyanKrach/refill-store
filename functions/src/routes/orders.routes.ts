@@ -79,6 +79,7 @@ const createOrderSchema = z.object({
     .optional()
     .nullable(),
   useWallet: z.boolean().default(false),
+  walletAmountUsd: z.number().min(0).finite().optional(),
   customerNote: z.string().trim().max(300).optional().nullable(),
 });
 
@@ -116,6 +117,7 @@ ordersRouter.post(
       paymentMethod: body.paymentMethod,
       contactPhone: body.contactPhone ?? null,
       useWallet: body.useWallet,
+      walletAmountUsd: body.walletAmountUsd,
       customerNote: body.customerNote ?? null,
       ip: clientIp(req),
       userAgent: userAgent(req),
@@ -330,6 +332,7 @@ const previewSchema = z.object({
   clientPlatform: z.enum(['web', 'app']).default('web'),
   creatorCode: z.string().trim().max(32).optional().nullable(),
   useWallet: z.boolean().default(false),
+  walletAmountUsd: z.number().min(0).finite().optional(),
   /** Opcional: permite comprobar ya el límite del cupón por ID de jugador. */
   playerId: z.string().trim().max(120).optional().nullable(),
 });
@@ -413,13 +416,13 @@ ordersRouter.post(
     // que se va a cobrar.
     const walletEnabled = config.checkout.walletEnabled !== false;
     const walletBalanceUsd = Number((profile.walletBalanceUsd ?? 0).toFixed(2));
-    let walletAppliedUsd =
-      body.useWallet && walletEnabled ? Math.min(walletBalanceUsd, totalUsd) : 0;
-    let amountDueUsd = round(totalUsd - walletAppliedUsd, 4);
-    if (amountDueUsd > 0 && amountDueUsd < 0.01) {
-      walletAppliedUsd = totalUsd;
-      amountDueUsd = 0;
-    }
+    const { walletAppliedUsd, amountDueUsd } = ordersService.computeWalletSplit({
+      useWallet: body.useWallet,
+      walletEnabled,
+      walletBalanceUsd,
+      totalUsd,
+      walletAmountUsd: body.walletAmountUsd,
+    });
 
     ok(res, {
       subtotalUsd,

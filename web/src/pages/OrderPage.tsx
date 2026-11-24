@@ -20,7 +20,7 @@ import { ConfirmDialog } from '@/components/ui/Modal';
 import { OrderStatusBadge, FullPageLoader, ErrorState } from '@/components/ui/Feedback';
 import { CopyField } from '@/components/common/CopyField';
 import { ROUTES } from '@/lib/constants';
-import { formatBs, formatDateTime, formatUsd, formatRefillCoins, statusMeta } from '@/lib/format';
+import { formatBs, formatDateTime, formatOrderPaymentMethod, formatUsd, formatRefillCoins, statusMeta } from '@/lib/format';
 import { describeOrder } from '@/lib/orderItem';
 import { cn, errorMessage, openWhatsapp } from '@/lib/utils';
 import { buildTelegramOrderUrl, getActiveSupportChannels, resolveManualWhatsappUrl } from '@/lib/support';
@@ -264,26 +264,40 @@ export function OrderPage() {
               </div>
             )}
             {walletApplied > 0 && (
-              <div className="flex justify-between gap-3">
-                <dt className="flex items-center gap-1.5 text-slate-400">
-                  <Coins className="h-3.5 w-3.5 text-amber-400" aria-hidden />
-                  RefillCoins
-                </dt>
-                <dd className="tabular text-amber-400">−{formatRefillCoins(walletApplied)}</dd>
-              </div>
+              <>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-400">Total de la orden</dt>
+                  <dd className="tabular text-slate-200">{formatUsd(order.pricing.totalUsd)}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="flex items-center gap-1.5 text-slate-400">
+                    <Coins className="h-3.5 w-3.5 text-amber-400" aria-hidden />
+                    RefillCoins aplicadas
+                  </dt>
+                  <dd className="tabular text-amber-400">−{formatRefillCoins(walletApplied)}</dd>
+                </div>
+              </>
             )}
             <div className="flex justify-between gap-3 border-t border-base-600 pt-2">
               <dt className="font-semibold text-white">
-                {order.pricing.totalBs > 0 ? 'Total transferido' : 'Total'}
+                {order.pricing.totalBs > 0
+                  ? walletApplied > 0
+                    ? 'Restante'
+                    : 'Total transferido'
+                  : 'Total'}
               </dt>
               <dd className="text-right">
                 <span className="block font-bold tabular text-white">
                   {order.pricing.totalBs > 0
-                    ? formatBs(order.pricing.totalBs)
+                    ? order.payment.method === 'binance_pay'
+                      ? `${formatUsd(order.pricing.amountDueUsd ?? Math.max(0, order.pricing.totalUsd - walletApplied))} USDT`
+                      : formatBs(order.pricing.totalBs)
                     : 'Pagado con RefillCoins'}
                 </span>
                 <span className="block text-xs tabular text-slate-500">
-                  {formatUsd(order.pricing.totalUsd)} · tasa {order.pricing.rate}
+                  {walletApplied > 0 && order.pricing.totalBs > 0
+                    ? `${formatUsd(order.pricing.amountDueUsd ?? Math.max(0, order.pricing.totalUsd - walletApplied))} · tasa ${order.pricing.rate}`
+                    : `${formatUsd(order.pricing.totalUsd)} · tasa ${order.pricing.rate}`}
                 </span>
               </dd>
             </div>
@@ -334,13 +348,7 @@ export function OrderPage() {
             <div className="flex justify-between gap-3">
               <dt className="text-slate-500">Método</dt>
               <dd className="text-slate-300">
-                {isWalletOnly
-                  ? 'RefillCoins'
-                  : order.payment.method === 'transfer'
-                    ? 'Transferencia'
-                    : order.payment.method === 'binance_pay'
-                      ? 'Binance Pay'
-                      : 'Pago Móvil'}
+                {formatOrderPaymentMethod(order)}
               </dd>
             </div>
             <div className="flex justify-between gap-3">
