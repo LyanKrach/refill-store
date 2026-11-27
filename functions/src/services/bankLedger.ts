@@ -18,11 +18,18 @@ import { log } from '../lib/logger';
 import { round } from '../lib/money';
 import { getConfig } from './settings';
 import { dayKey } from './stats';
+import {
+  getAllBcvRatesMap,
+  getOrResolveBcvRateForDate,
+  isValidDateKey,
+} from './bcvRates';
 import type {
   BankLedgerAccountSummary,
+  BankLedgerDailyBcvRow,
   BankLedgerEntry,
   BankLedgerQueryResult,
   BankLedgerSource,
+  BankLedgerUsdBcvSummary,
   Order,
   PaymentMethod,
   TimestampLike,
@@ -170,6 +177,7 @@ function parseAccountKey(accountKeyRaw: string): ResolvedBankAccount {
 
 function toMillis(value: TimestampLike | unknown): number {
   if (value == null) return 0;
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : 0;
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
   if (typeof value === 'string') {
     const parsed = Date.parse(value);
@@ -199,6 +207,7 @@ export interface RecordInflowInput {
   orderCode?: string | null;
   reference: string;
   note?: string | null;
+  bcvRateSnapshot?: number | null;
   createdAt?: TimestampLike | null;
   createdBy?: string | null;
 }
@@ -245,6 +254,30 @@ export async function recordInflow(input: RecordInflowInput): Promise<RecordInfl
   const col = db.collection(BANK_LEDGER_COLLECTION);
   const ref = col.doc(docId);
 
+  const entryCreatedAt = input.createdAt ?? now();
+  const createdMs = toMillis(entryCreatedAt) || Date.now();
+  const inflowDay = dayKey(new Date(createdMs));
+  const rawFallback = Number(input.bcvRateSnapshot);
+  const fallbackSnapshotRate =
+    Number.isFinite(rawFallback) && rawFallback > 0 ? round(rawFallback, 4) : null;
+
+  let bcvRateSnapshot: number | null = fallbackSnapshotRate;
+  try {
+    const resolvedBcv = await getOrResolveBcvRateForDate(inflowDay, {
+      allowLiveFetch: inflowDay === dayKey(new Date()),
+      updatedBy: input.createdBy ?? 'system',
+      fallbackSnapshotRate,
+    });
+    if (resolvedBcv.rate !== null && resolvedBcv.rate > 0) {
+      bcvRateSnapshot = resolvedBcv.rate;
+    }
+  } catch (err) {
+    log.warn('No se pudo resolver bcvRateSnapshot al registrar ingreso', {
+      inflowDay,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   const created = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (snap.exists) {
@@ -264,7 +297,8 @@ export async function recordInflow(input: RecordInflowInput): Promise<RecordInfl
       orderCode: input.orderCode ?? null,
       reference: cleanRef,
       note: input.note?.trim() || null,
-      createdAt: input.createdAt ?? now(),
+      bcvRateSnapshot,
+      createdAt: entryCreatedAt,
       createdBy: input.createdBy ?? 'system',
     };
 
@@ -422,11 +456,13 @@ export interface GetLedgerReportOptions {
   accountKey?: string;
   from?: string;
   to?: string;
+  valuationDate?: string;
 }
 
 /**
  * Devuelve el resumen completo de caja en Bs (saldo histórico neto, ingresos,
- * retiros, ingresado hoy) y los movimientos filtrados por fecha descendente.
+ * retiros, ingresado hoy), los movimientos filtrados por fecha descendente
+ * y la valoración en USD a Tasa BCV Real (sin margen comercial).
  */
 export async function getLedgerReport(
   options: GetLedgerReportOptions = {}
@@ -525,6 +561,144 @@ export async function getLedgerReport(
     else if (m.type === 'withdrawal') filteredWithdrawalBs += amt;
   }
 
+  const requestedValuationDate = options.valuationDate?.trim() || '';
+  if (requestedValuationDate && !isValidDateKey(requestedValuationDate)) {
+    throw invalidArgument('Fecha de valoración inválida. Usa YYYY-MM-DD.');
+  }
+  const valuationDate = requestedValuationDate || todayCaracas;
+
+  const dayBuckets = new Map<
+    string,
+    {
+      inflowBsRaw: number;
+      withdrawalBsRaw: number;
+      inflowCount: number;
+      fallbackSnapshot: number | null;
+      fallbackSnapshotMs: number;
+    }
+  >();
+
+  for (const entry of selectedEntries) {
+    const day = entryDayCaracas(entry);
+    if (!day) continue;
+    let bucket = dayBuckets.get(day);
+    if (!bucket) {
+      bucket = {
+        inflowBsRaw: 0,
+        withdrawalBsRaw: 0,
+        inflowCount: 0,
+        fallbackSnapshot: null,
+        fallbackSnapshotMs: -1,
+      };
+      dayBuckets.set(day, bucket);
+    }
+    const amt = Number(entry.amountBs) || 0;
+    if (entry.type === 'inflow') {
+      bucket.inflowBsRaw += amt;
+      bucket.inflowCount += 1;
+      const snapRate = Number(entry.bcvRateSnapshot);
+      const entryMs = toMillis(entry.createdAt);
+      if (Number.isFinite(snapRate) && snapRate > 0 && entryMs >= bucket.fallbackSnapshotMs) {
+        bucket.fallbackSnapshot = round(snapRate, 4);
+        bucket.fallbackSnapshotMs = entryMs;
+      }
+    } else if (entry.type === 'withdrawal') {
+      bucket.withdrawalBsRaw += amt;
+    }
+  }
+
+  const knownRates = await getAllBcvRatesMap();
+  const valuationFallbackSnapshot = dayBuckets.get(valuationDate)?.fallbackSnapshot ?? null;
+  const valuationResolution = await getOrResolveBcvRateForDate(valuationDate, {
+    knownRates,
+    allowLiveFetch: valuationDate === todayCaracas,
+    fallbackSnapshotRate: valuationFallbackSnapshot,
+  });
+
+  const sortedDays = Array.from(dayBuckets.keys()).sort((a, b) => a.localeCompare(b));
+  const allDailyRows: BankLedgerDailyBcvRow[] = [];
+  let rawDailySumUsd = 0;
+  let unresolvedDaysCount = 0;
+
+  for (const dateKey of sortedDays) {
+    const bucket = dayBuckets.get(dateKey)!;
+    const rateRes = await getOrResolveBcvRateForDate(dateKey, {
+      knownRates,
+      allowLiveFetch: dateKey === todayCaracas,
+      fallbackSnapshotRate: bucket.fallbackSnapshot,
+    });
+
+    const inflowBs = round(bucket.inflowBsRaw, 2);
+    const withdrawalBs = round(bucket.withdrawalBsRaw, 2);
+    const netBs = round(inflowBs - withdrawalBs, 2);
+    const bcvRate = rateRes.rate;
+    const inflowUsd = bcvRate && bcvRate > 0 ? round(inflowBs / bcvRate, 2) : null;
+
+    if (inflowBs > 0) {
+      if (bcvRate && bcvRate > 0) {
+        rawDailySumUsd += bucket.inflowBsRaw / bcvRate;
+      } else {
+        unresolvedDaysCount += 1;
+      }
+    }
+
+    allDailyRows.push({
+      dateKey,
+      bcvRate,
+      rateSource: rateRes.source,
+      carriedFromDateKey: rateRes.carriedFromDateKey,
+      inflowBs,
+      inflowUsd,
+      withdrawalBs,
+      netBs,
+      inflowCount: bucket.inflowCount,
+    });
+  }
+
+  const dailyBreakdown =
+    fromDate || toDate
+      ? allDailyRows.filter((row) => {
+          if (fromDate && row.dateKey < fromDate) return false;
+          if (toDate && row.dateKey > toDate) return false;
+          return true;
+        })
+      : allDailyRows;
+
+  const valuationRate = valuationResolution.rate;
+  const totalInflowUsdAtDate =
+    valuationRate && valuationRate > 0
+      ? round(selectedSummary.totalInflowBs / valuationRate, 2)
+      : null;
+  const netBalanceUsdAtDate =
+    valuationRate && valuationRate > 0
+      ? round(selectedSummary.netBalanceBs / valuationRate, 2)
+      : null;
+  const totalInflowUsdDailySum = round(rawDailySumUsd, 2);
+  const exchangeDiffUsd =
+    totalInflowUsdAtDate !== null
+      ? round(totalInflowUsdAtDate - totalInflowUsdDailySum, 2)
+      : null;
+
+  const usdBcvSummary: BankLedgerUsdBcvSummary = {
+    valuationDate,
+    valuationRate,
+    valuationRateSource: valuationResolution.source,
+    valuationCarriedFromDateKey: valuationResolution.carriedFromDateKey,
+    dailyBreakdown,
+    allAtValuationDate: {
+      totalInflowBs: selectedSummary.totalInflowBs,
+      totalInflowUsdAtDate,
+      netBalanceBs: selectedSummary.netBalanceBs,
+      netBalanceUsdAtDate,
+    },
+    summedByDailyRate: {
+      totalInflowBs: selectedSummary.totalInflowBs,
+      totalInflowUsdDailySum,
+      exchangeDiffUsd,
+      unresolvedDaysCount,
+    },
+  };
+
   return {
     activeAccountKey: activeAccount.accountKey,
     selectedAccountKey,
@@ -533,6 +707,7 @@ export async function getLedgerReport(
     filteredInflowBs: round(filteredInflowBs, 2),
     filteredWithdrawalBs: round(filteredWithdrawalBs, 2),
     movements,
+    usdBcvSummary,
   };
 }
 

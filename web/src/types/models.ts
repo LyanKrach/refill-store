@@ -1085,6 +1085,50 @@ export type BankLedgerType = 'inflow' | 'withdrawal';
 
 export type BankLedgerSource = 'web' | 'whatsapp' | 'manual_transfer' | 'withdrawal';
 
+export type BcvRateSource = 'auto' | 'manual' | 'carry_forward';
+
+export interface BcvRateRecord {
+  dateKey: string;
+  rate: number;
+  source: BcvRateSource;
+  updatedAt: TimestampLike;
+  updatedBy: string | null;
+  provider?: 'pabilo' | 'public' | null;
+  carriedFromDateKey?: string | null;
+}
+
+export interface BankLedgerDailyBcvRow {
+  dateKey: string;
+  bcvRate: number | null;
+  rateSource: BcvRateSource | null;
+  carriedFromDateKey?: string | null;
+  inflowBs: number;
+  inflowUsd: number | null;
+  withdrawalBs: number;
+  netBs: number;
+  inflowCount: number;
+}
+
+export interface BankLedgerUsdBcvSummary {
+  valuationDate: string;
+  valuationRate: number | null;
+  valuationRateSource: BcvRateSource | null;
+  valuationCarriedFromDateKey?: string | null;
+  dailyBreakdown: BankLedgerDailyBcvRow[];
+  allAtValuationDate: {
+    totalInflowBs: number;
+    totalInflowUsdAtDate: number | null;
+    netBalanceBs: number;
+    netBalanceUsdAtDate: number | null;
+  };
+  summedByDailyRate: {
+    totalInflowBs: number;
+    totalInflowUsdDailySum: number;
+    exchangeDiffUsd: number | null;
+    unresolvedDaysCount: number;
+  };
+}
+
 export interface BankLedgerEntry {
   id: string;
   type: BankLedgerType;
@@ -1099,6 +1143,7 @@ export interface BankLedgerEntry {
   orderCode: string | null;
   reference: string | null;
   note: string | null;
+  bcvRateSnapshot?: number | null;
   createdAt: TimestampLike;
   createdBy: string | null;
 }
@@ -1129,4 +1174,5 @@ export interface BankLedgerQueryResult {
   filteredInflowBs: number;
   filteredWithdrawalBs: number;
   movements: BankLedgerEntry[];
+  usdBcvSummary: BankLedgerUsdBcvSummary;
 }

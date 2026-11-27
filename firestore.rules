@@ -215,6 +215,11 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Histórico diario de tasa BCV oficial pura. Sólo Admin SDK.
+    match /bcvRates/{dateKey} {
+      allow read, write: if false;
+    }
+
     // ---------- Cierre por defecto ----------
     match /{document=**} {
       allow read, write: if false;

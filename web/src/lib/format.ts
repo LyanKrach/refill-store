@@ -323,6 +323,9 @@ export function auditActionLabel(action: string): string {
     'setup.admin.granted': 'Admin asignado',
     'centralone.sync.requested': 'Sincronización con Central One',
     'centralone.webhook.tested': 'Prueba del webhook de Central One',
+    'bank_ledger.withdrawal.created': 'Retiro registrado en Caja Bs',
+    'bank_ledger.withdrawal.deleted': 'Retiro eliminado en Caja Bs',
+    'bank_ledger.bcv_rate.updated': 'Tasa BCV real actualizada',
   };
   return labels[action] ?? action;
 }

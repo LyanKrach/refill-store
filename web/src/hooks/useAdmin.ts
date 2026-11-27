@@ -14,6 +14,7 @@ import type {
   AuditLog,
   BankLedgerEntry,
   BankLedgerQueryResult,
+  BcvRateRecord,
   Coupon,
   Game,
   Order,
@@ -1030,11 +1031,13 @@ export function useAdminBankLedger(filters: {
   accountKey?: string;
   from?: string;
   to?: string;
+  valuationDate?: string;
 }) {
   const params = new URLSearchParams();
   if (filters.accountKey) params.set('accountKey', filters.accountKey);
   if (filters.from) params.set('from', filters.from);
   if (filters.to) params.set('to', filters.to);
+  if (filters.valuationDate) params.set('valuationDate', filters.valuationDate);
   const query = params.toString();
   const suffix = query ? `?${query}` : '';
 
@@ -1042,6 +1045,18 @@ export function useAdminBankLedger(filters: {
     queryKey: QUERY_KEYS.adminBankLedger(query || 'default'),
     queryFn: () => api.get<BankLedgerQueryResult>(`/admin/bank-ledger${suffix}`),
     staleTime: 15_000,
+  });
+}
+
+export function useUpsertBcvRate() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ dateKey, rate }: { dateKey: string; rate: number }) =>
+      api.put<{ rate: BcvRateRecord }>(`/admin/bank-ledger/bcv-rates/${dateKey}`, { rate }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'bank-ledger'] });
+    },
   });
 }
 

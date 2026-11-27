@@ -229,6 +229,7 @@ require.cache[firebaseModulePath] = {
       adminAlerts: 'adminAlerts',
       stats: 'stats',
       bankLedger: 'bankLedger',
+      bcvRates: 'bcvRates',
     },
     CONFIG_DOC_ID: 'app',
     orders: () => mockDb.collection('orders'),
@@ -238,6 +239,7 @@ require.cache[firebaseModulePath] = {
     auditLogs: () => mockDb.collection('auditLogs'),
     adminAlerts: () => mockDb.collection('adminAlerts'),
     bankLedger: () => mockDb.collection('bankLedger'),
+    bcvRates: () => mockDb.collection('bcvRates'),
     now: () => Timestamp.now(),
     minutesFromNow: (m) => Timestamp.fromMillis(Date.now() + m * 60_000),
     Timestamp,
@@ -250,8 +252,12 @@ const stubModule = (relPath, exportsObj) => {
 };
 
 let mockPabiloResult = null;
+let mockReferenceRate = { value: 500, source: 'pabilo' };
 stubModule('../lib/services/pabilo.js', {
   verifyPayment: async () => mockPabiloResult,
+});
+stubModule('../lib/services/rate.js', {
+  fetchReferenceRate: async () => mockReferenceRate,
 });
 stubModule('../lib/services/catalog.js', { decrementStock: async () => {} });
 stubModule('../lib/services/coupons.js', { consume: async () => {} });
@@ -289,6 +295,7 @@ stubModule('../lib/services/dispatch.js', {
 stubModule('../lib/services/orderEvents.js', { addEvent: async () => {} });
 
 const bankLedger = require('../lib/services/bankLedger.js');
+const bcvRatesService = require('../lib/services/bcvRates.js');
 const ordersService = require('../lib/services/orders.js');
 const whatsappSync = require('../lib/services/whatsappSync.js');
 const settingsService = require('../lib/services/settings.js');
@@ -641,4 +648,170 @@ test('5. Unifica cuenta entre Pago Móvil Web, Transferencia sin teléfono y Wha
   report = await bankLedger.getLedgerReport({ accountKey: ACTIVE_ACCOUNT_KEY });
   assert.equal(report.summary.totalWithdrawalBs, 0);
   assert.equal(report.summary.netBalanceBs, 4500);
+});
+
+test('6. Usa tasa BCV pura (sin markup de la web) y guarda bcvRates/{hoy} + bcvRateSnapshot', async () => {
+  // La web tiene rate.value = 1100 (con margen 10%), pero la tasa oficial BCV pura es 1000.
+  store.set('config/app', {
+    ...store.get('config/app'),
+    rate: {
+      value: 1100,
+      markupPercent: 10,
+      autoRefresh: true,
+      source: 'auto',
+    },
+  });
+  mockReferenceRate = { value: 1000, source: 'pabilo' };
+
+  const todayKey = bcvRatesService.todayCaracasKey();
+  const res = await bankLedger.recordInflow({
+    paymentMethod: 'pagomovil_bdv',
+    amountBs: 2000,
+    source: 'web',
+    orderId: 'ord-pure-1',
+    reference: '77001122',
+  });
+
+  assert.equal(res.recorded, true);
+  const ledgerDoc = store.get(`bankLedger/${res.docId}`);
+  assert.equal(ledgerDoc.bcvRateSnapshot, 1000);
+
+  const bcvDoc = store.get(`bcvRates/${todayKey}`);
+  assert.ok(bcvDoc);
+  assert.equal(bcvDoc.rate, 1000);
+  assert.equal(bcvDoc.source, 'auto');
+
+  const report = await bankLedger.getLedgerReport({ accountKey: ACTIVE_ACCOUNT_KEY });
+  assert.equal(report.usdBcvSummary.valuationRate, 1000);
+  assert.equal(report.usdBcvSummary.allAtValuationDate.totalInflowUsdAtDate, 2);
+});
+
+test('7. Agrupa estrictamente por fecha America/Caracas (22:00 Caracas = 02:00 UTC del día siguiente)', async () => {
+  await bcvRatesService.setManualBcvRate('2026-10-10', 40, 'admin@example.com');
+  await bcvRatesService.setManualBcvRate('2026-10-11', 50, 'admin@example.com');
+
+  // 2026-10-10 22:00:00 America/Caracas (UTC-4) === 2026-10-11 02:00:00 UTC
+  const lateNightCaracas = Timestamp.fromDate(new Date('2026-10-11T02:00:00.000Z'));
+
+  await bankLedger.recordInflow({
+    paymentMethod: 'pagomovil_bdv',
+    amountBs: 400,
+    source: 'web',
+    orderId: 'ord-tz',
+    reference: '88001122',
+    createdAt: lateNightCaracas,
+  });
+
+  const report = await bankLedger.getLedgerReport({
+    accountKey: ACTIVE_ACCOUNT_KEY,
+    valuationDate: '2026-10-10',
+  });
+  const rowOct10 = report.usdBcvSummary.dailyBreakdown.find((r) => r.dateKey === '2026-10-10');
+  const rowOct11 = report.usdBcvSummary.dailyBreakdown.find((r) => r.dateKey === '2026-10-11');
+
+  assert.ok(rowOct10);
+  assert.equal(rowOct11, undefined);
+  assert.equal(rowOct10.inflowBs, 400);
+  assert.equal(rowOct10.bcvRate, 40);
+  assert.equal(rowOct10.inflowUsd, 10);
+});
+
+test('8. Fin de semana/feriado hace carry_forward y auto nunca sobrescribe manual', async () => {
+  // Viernes 2026-10-16 con tasa manual 52.50
+  await bcvRatesService.setManualBcvRate('2026-10-16', 52.5, 'admin@example.com');
+
+  // Domingo 2026-10-18 sin publicación propia -> debe heredar 52.50
+  const sundayResolved = await bcvRatesService.getOrResolveBcvRateForDate('2026-10-18', {
+    allowLiveFetch: false,
+  });
+  assert.equal(sundayResolved.rate, 52.5);
+  assert.equal(sundayResolved.source, 'carry_forward');
+  assert.equal(sundayResolved.carriedFromDateKey, '2026-10-16');
+
+  // Hoy fijado manualmente como 60.00 -> live fetch (999) NO debe sobrescribirlo
+  const todayKey = bcvRatesService.todayCaracasKey();
+  await bcvRatesService.setManualBcvRate(todayKey, 60, 'admin@example.com');
+  mockReferenceRate = { value: 999, source: 'pabilo' };
+
+  const todayResolved = await bcvRatesService.getOrResolveBcvRateForDate(todayKey, {
+    allowLiveFetch: true,
+  });
+  assert.equal(todayResolved.rate, 60);
+  assert.equal(todayResolved.source, 'manual');
+  assert.equal(store.get(`bcvRates/${todayKey}`).rate, 60);
+  assert.equal(store.get(`bcvRates/${todayKey}`).source, 'manual');
+});
+
+test('9. Calcula allAtValuationDate, summedByDailyRate y exchangeDiffUsd correctamente', async () => {
+  // Día 1: 1000 Bs a tasa 50 = $20.00
+  await bcvRatesService.setManualBcvRate('2026-10-01', 50, 'admin@example.com');
+  await bankLedger.recordInflow({
+    paymentMethod: 'pagomovil_bdv',
+    amountBs: 1000,
+    source: 'web',
+    orderId: 'ord-d1',
+    reference: '10010001',
+    createdAt: Timestamp.fromDate(new Date('2026-10-01T16:00:00.000Z')),
+  });
+
+  // Día 2: 2000 Bs a tasa 80 = $25.00
+  await bcvRatesService.setManualBcvRate('2026-10-02', 80, 'admin@example.com');
+  await bankLedger.recordInflow({
+    paymentMethod: 'pagomovil_bdv',
+    amountBs: 2000,
+    source: 'web',
+    orderId: 'ord-d2',
+    reference: '10020002',
+    createdAt: Timestamp.fromDate(new Date('2026-10-02T16:00:00.000Z')),
+  });
+
+  // Retiro de 600 Bs -> totalInflowBs = 3000, netBalanceBs = 2400
+  await bankLedger.recordWithdrawal({
+    accountKey: ACTIVE_ACCOUNT_KEY,
+    amountBs: 600,
+    note: 'Retiro prueba cambiaria',
+    createdBy: 'admin@example.com',
+  });
+
+  // Día 3 (valoración): tasa 100
+  // allAtValuationDate: totalInflowUsdAtDate = 3000/100 = 30.00; netBalanceUsdAtDate = 2400/100 = 24.00
+  // summedByDailyRate: 20.00 + 25.00 = 45.00; exchangeDiffUsd = 30.00 - 45.00 = -15.00
+  await bcvRatesService.setManualBcvRate('2026-10-03', 100, 'admin@example.com');
+
+  const report = await bankLedger.getLedgerReport({
+    accountKey: ACTIVE_ACCOUNT_KEY,
+    valuationDate: '2026-10-03',
+  });
+
+  const todayKey = bcvRatesService.todayCaracasKey();
+  const { usdBcvSummary } = report;
+  assert.equal(usdBcvSummary.valuationDate, '2026-10-03');
+  assert.equal(usdBcvSummary.valuationRate, 100);
+  assert.equal(usdBcvSummary.dailyBreakdown.length, 3);
+  assert.deepEqual(
+    usdBcvSummary.dailyBreakdown.map((r) => r.dateKey),
+    ['2026-10-01', '2026-10-02', todayKey]
+  );
+  assert.equal(usdBcvSummary.dailyBreakdown[2].withdrawalBs, 600);
+  assert.equal(usdBcvSummary.dailyBreakdown[2].inflowBs, 0);
+  assert.equal(usdBcvSummary.allAtValuationDate.totalInflowBs, 3000);
+  assert.equal(usdBcvSummary.allAtValuationDate.totalInflowUsdAtDate, 30);
+  assert.equal(usdBcvSummary.allAtValuationDate.netBalanceBs, 2400);
+  assert.equal(usdBcvSummary.allAtValuationDate.netBalanceUsdAtDate, 24);
+  assert.equal(usdBcvSummary.summedByDailyRate.totalInflowUsdDailySum, 45);
+  assert.equal(usdBcvSummary.summedByDailyRate.exchangeDiffUsd, -15);
+  assert.equal(usdBcvSummary.summedByDailyRate.unresolvedDaysCount, 0);
+
+  const filteredReport = await bankLedger.getLedgerReport({
+    accountKey: ACTIVE_ACCOUNT_KEY,
+    from: '2026-10-01',
+    to: '2026-10-02',
+    valuationDate: '2026-10-03',
+  });
+  assert.deepEqual(
+    filteredReport.usdBcvSummary.dailyBreakdown.map((r) => r.dateKey),
+    ['2026-10-01', '2026-10-02']
+  );
+  assert.equal(filteredReport.usdBcvSummary.allAtValuationDate.netBalanceUsdAtDate, 24);
+  assert.equal(filteredReport.usdBcvSummary.summedByDailyRate.totalInflowUsdDailySum, 45);
 });

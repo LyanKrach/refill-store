@@ -59,6 +59,8 @@ export const COLLECTIONS = {
   providerSync: 'providerSync',
   /** Movimientos de caja en Bs por cuenta bancaria (ingresos verificados y retiros). */
   bankLedger: 'bankLedger',
+  /** Histórico diario de tasa oficial pura del BCV (clave YYYY-MM-DD en America/Caracas). */
+  bcvRates: 'bcvRates',
 } as const;
 
 export const CONFIG_DOC_ID = 'app';
@@ -83,6 +85,7 @@ export const playerIdCache = () => db.collection(COLLECTIONS.playerIdCache);
 export const providerWebhookEvents = () => db.collection(COLLECTIONS.providerWebhookEvents);
 export const providerSync = () => db.collection(COLLECTIONS.providerSync);
 export const bankLedger = () => db.collection(COLLECTIONS.bankLedger);
+export const bcvRates = () => db.collection(COLLECTIONS.bcvRates);
 export const configDoc = () => db.collection(COLLECTIONS.config).doc(CONFIG_DOC_ID);
 /** Configuración privada que no se expone por las reglas públicas de Firestore. */
 export const privateChatbotConfigDoc = () => db.collection('privateConfig').doc('chatbot');

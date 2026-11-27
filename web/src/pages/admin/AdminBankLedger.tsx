@@ -5,17 +5,23 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   Calendar,
+  Check,
+  DollarSign,
   Download,
   Landmark,
+  Pencil,
   RefreshCw,
+  Scale,
   Trash2,
   TrendingUp,
   Wallet,
+  X,
 } from 'lucide-react';
 import {
   useAdminBankLedger,
   useCreateBankWithdrawal,
   useDeleteBankWithdrawal,
+  useUpsertBcvRate,
 } from '@/hooks/useAdmin';
 import { useDocumentTitle } from '@/hooks/useMisc';
 import { Button } from '@/components/ui/Button';
@@ -23,8 +29,13 @@ import { Card, CardHeader, StatCard } from '@/components/ui/Card';
 import { EmptyState, Skeleton } from '@/components/ui/Feedback';
 import { Input, Select } from '@/components/ui/Field';
 import { ROUTES } from '@/lib/constants';
-import { formatBs, formatDateTime, formatNumber, toDate } from '@/lib/format';
-import type { BankLedgerEntry, BankLedgerSource } from '@/types/models';
+import { formatBs, formatDateTime, formatNumber, formatUsd, toDate } from '@/lib/format';
+import type {
+  BankLedgerEntry,
+  BankLedgerSource,
+  BankLedgerUsdBcvSummary,
+  BcvRateSource,
+} from '@/types/models';
 
 const SOURCE_META: Record<BankLedgerSource, { label: string; className: string }> = {
   web: {
@@ -45,6 +56,43 @@ const SOURCE_META: Record<BankLedgerSource, { label: string; className: string }
   },
 };
 
+const RATE_SOURCE_META: Record<BcvRateSource, { label: string; className: string }> = {
+  auto: {
+    label: 'Auto BCV',
+    className: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300',
+  },
+  manual: {
+    label: 'Manual',
+    className: 'border-amber-500/30 bg-amber-500/15 text-amber-300',
+  },
+  carry_forward: {
+    label: 'Heredada',
+    className: 'border-slate-500/30 bg-slate-500/15 text-slate-300',
+  },
+};
+
+function dateKeyCaracasFromDate(dt: Date | null): string {
+  if (!dt) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Caracas',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(dt);
+  const y = parts.find((p) => p.type === 'year')?.value ?? '';
+  const m = parts.find((p) => p.type === 'month')?.value ?? '';
+  const d = parts.find((p) => p.type === 'day')?.value ?? '';
+  return y && m && d ? `${y}-${m}-${d}` : '';
+}
+
+function formatBcvRate(rate: number | null | undefined): string {
+  if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return '—';
+  return `${new Intl.NumberFormat('es-VE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(rate)} Bs/$`;
+}
+
 function csvEscape(value: string | number | null | undefined): string {
   const str = String(value ?? '');
   if (/[",\n\r;]/.test(str)) {
@@ -60,8 +108,16 @@ function downloadCsv(
     totalInflowBs: number;
     totalWithdrawalBs: number;
     netBalanceBs: number;
-  }
+  },
+  usdBcvSummary?: BankLedgerUsdBcvSummary
 ) {
+  const rateByDay = new Map<string, number>();
+  for (const row of usdBcvSummary?.dailyBreakdown ?? []) {
+    if (row.bcvRate && row.bcvRate > 0) {
+      rateByDay.set(row.dateKey, row.bcvRate);
+    }
+  }
+
   const header = [
     'FechaHoraCaracas',
     'Tipo',
@@ -70,6 +126,8 @@ function downloadCsv(
     'Orden',
     'ConceptoNota',
     'MontoBs',
+    'Tasa BCV Real',
+    'Equivalente USD BCV',
     'Cuenta',
     'RegistradoPor',
   ];
@@ -83,8 +141,14 @@ function downloadCsv(
           timeZone: 'America/Caracas',
         }).format(dt)
       : '';
+    const day = dateKeyCaracasFromDate(dt);
+    const rate =
+      (day ? rateByDay.get(day) : undefined) ??
+      (m.bcvRateSnapshot && m.bcvRateSnapshot > 0 ? m.bcvRateSnapshot : undefined);
     const signedAmount =
       m.type === 'withdrawal' ? -Math.abs(m.amountBs) : Math.abs(m.amountBs);
+    const usdEq = rate && rate > 0 ? (signedAmount / rate).toFixed(2) : '';
+
     return [
       fecha,
       m.type === 'withdrawal' ? 'Retiro' : 'Ingreso',
@@ -93,6 +157,8 @@ function downloadCsv(
       m.orderCode ?? m.orderId ?? '',
       m.note ?? '',
       signedAmount.toFixed(2),
+      rate && rate > 0 ? rate.toFixed(4) : '',
+      usdEq,
       m.accountKey,
       m.createdBy ?? '',
     ]
@@ -102,20 +168,79 @@ function downloadCsv(
 
   rows.push('');
   rows.push(
-    ['RESUMEN CUENTA', '', '', '', '', 'Total ingresado', summary.totalInflowBs.toFixed(2), accountKey, '']
+    ['RESUMEN CUENTA', '', '', '', '', 'Total ingresado', summary.totalInflowBs.toFixed(2), '', '', accountKey, '']
       .map(csvEscape)
       .join(',')
   );
   rows.push(
-    ['RESUMEN CUENTA', '', '', '', '', 'Total retirado', (-summary.totalWithdrawalBs).toFixed(2), accountKey, '']
+    ['RESUMEN CUENTA', '', '', '', '', 'Total retirado', (-summary.totalWithdrawalBs).toFixed(2), '', '', accountKey, '']
       .map(csvEscape)
       .join(',')
   );
   rows.push(
-    ['RESUMEN CUENTA', '', '', '', '', 'Saldo neto en cuenta', summary.netBalanceBs.toFixed(2), accountKey, '']
+    ['RESUMEN CUENTA', '', '', '', '', 'Saldo neto en cuenta', summary.netBalanceBs.toFixed(2), '', '', accountKey, '']
       .map(csvEscape)
       .join(',')
   );
+
+  if (usdBcvSummary) {
+    const valRate = usdBcvSummary.valuationRate;
+    rows.push(
+      [
+        'RESUMEN USD BCV',
+        '',
+        '',
+        '',
+        '',
+        `Total ingresado a tasa del ${usdBcvSummary.valuationDate}`,
+        usdBcvSummary.allAtValuationDate.totalInflowBs.toFixed(2),
+        valRate ? valRate.toFixed(4) : '',
+        usdBcvSummary.allAtValuationDate.totalInflowUsdAtDate !== null
+          ? usdBcvSummary.allAtValuationDate.totalInflowUsdAtDate.toFixed(2)
+          : '',
+        accountKey,
+        '',
+      ]
+        .map(csvEscape)
+        .join(',')
+    );
+    rows.push(
+      [
+        'RESUMEN USD BCV',
+        '',
+        '',
+        '',
+        '',
+        `Saldo neto a tasa del ${usdBcvSummary.valuationDate}`,
+        usdBcvSummary.allAtValuationDate.netBalanceBs.toFixed(2),
+        valRate ? valRate.toFixed(4) : '',
+        usdBcvSummary.allAtValuationDate.netBalanceUsdAtDate !== null
+          ? usdBcvSummary.allAtValuationDate.netBalanceUsdAtDate.toFixed(2)
+          : '',
+        accountKey,
+        '',
+      ]
+        .map(csvEscape)
+        .join(',')
+    );
+    rows.push(
+      [
+        'RESUMEN USD BCV',
+        '',
+        '',
+        '',
+        '',
+        'Total ingresado sumado por tasa diaria histórica',
+        usdBcvSummary.summedByDailyRate.totalInflowBs.toFixed(2),
+        '',
+        usdBcvSummary.summedByDailyRate.totalInflowUsdDailySum.toFixed(2),
+        accountKey,
+        '',
+      ]
+        .map(csvEscape)
+        .join(',')
+    );
+  }
 
   const csvContent = '\uFEFF' + [header.join(','), ...rows].join('\r\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -136,6 +261,12 @@ export function AdminBankLedger() {
   const [selectedAccount, setSelectedAccount] = useState<string>('');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
+  const [valuationDate, setValuationDate] = useState<string>('');
+  const [selectedDay, setSelectedDay] = useState<string>('');
+  const [dailyRangeFrom, setDailyRangeFrom] = useState<string>('');
+  const [dailyRangeTo, setDailyRangeTo] = useState<string>('');
+  const [editingDateKey, setEditingDateKey] = useState<string | null>(null);
+  const [editingRateValue, setEditingRateValue] = useState<string>('');
 
   const [amountInput, setAmountInput] = useState<string>('');
   const [noteInput, setNoteInput] = useState<string>('');
@@ -145,10 +276,12 @@ export function AdminBankLedger() {
     accountKey: selectedAccount || undefined,
     from: fromDate || undefined,
     to: toDate || undefined,
+    valuationDate: valuationDate || undefined,
   });
 
   const createWithdrawal = useCreateBankWithdrawal();
   const deleteWithdrawal = useDeleteBankWithdrawal();
+  const upsertBcvRate = useUpsertBcvRate();
 
   const report = ledgerQuery.data;
   const activeKey = report?.selectedAccountKey ?? report?.activeAccountKey ?? '';
@@ -213,6 +346,50 @@ export function AdminBankLedger() {
 
   const summary = report?.summary;
   const movements = report?.movements ?? [];
+  const usdBcv = report?.usdBcvSummary;
+
+  const filteredDailyRows = useMemo(() => {
+    const rows = usdBcv?.dailyBreakdown ?? [];
+    if (selectedDay) {
+      return rows.filter((r) => r.dateKey === selectedDay);
+    }
+    if (dailyRangeFrom || dailyRangeTo) {
+      return rows.filter((r) => {
+        if (dailyRangeFrom && r.dateKey < dailyRangeFrom) return false;
+        if (dailyRangeTo && r.dateKey > dailyRangeTo) return false;
+        return true;
+      });
+    }
+    return rows;
+  }, [usdBcv?.dailyBreakdown, selectedDay, dailyRangeFrom, dailyRangeTo]);
+
+  const selectedDayRow = useMemo(() => {
+    if (!selectedDay) return null;
+    return usdBcv?.dailyBreakdown.find((r) => r.dateKey === selectedDay) ?? null;
+  }, [usdBcv?.dailyBreakdown, selectedDay]);
+
+  function startEditRate(dateKey: string, currentRate: number | null | undefined) {
+    setEditingDateKey(dateKey);
+    setEditingRateValue(currentRate && currentRate > 0 ? String(currentRate) : '');
+  }
+
+  async function handleSaveBcvRate(dateKey: string) {
+    const normalized = editingRateValue.trim().replace(/\s+/g, '').replace(',', '.');
+    const rate = Number(normalized);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      toast.error('Ingresa una tasa BCV válida mayor a 0.');
+      return;
+    }
+
+    try {
+      await upsertBcvRate.mutateAsync({ dateKey, rate });
+      toast.success(`Tasa BCV real de ${dateKey} guardada: ${rate.toFixed(4)} Bs/$`);
+      setEditingDateKey(null);
+      setEditingRateValue('');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'No se pudo guardar la tasa BCV.');
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -300,6 +477,369 @@ export function AdminBankLedger() {
             />
           </div>
 
+          {usdBcv && (
+            <section className="space-y-4 rounded-2xl border border-base-600/80 bg-base-900/50 p-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="flex items-center gap-2 font-display text-lg font-bold text-white">
+                    <DollarSign className="h-5 w-5 text-emerald-400" />
+                    Equivalente en USD (Tasa BCV Real)
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    Calculado estrictamente con la tasa oficial pura del BCV (sin el margen comercial de la web), agrupado en hora Caracas (UTC-4).
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                {/* Bloque 2: Todo el Total a la Tasa de un Día */}
+                <Card className="border-sky-500/30 bg-base-900/80">
+                  <CardHeader
+                    title="Todo el total a la tasa de un día"
+                    description="Valora todo el histórico ingresado y el saldo neto actual usando una única tasa BCV real."
+                    icon={<Calendar className="h-5 w-5 text-sky-400" />}
+                  />
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                      <Input
+                        label="Fecha de tasa de referencia"
+                        type="date"
+                        value={valuationDate || usdBcv.valuationDate}
+                        onChange={(e) => setValuationDate(e.target.value)}
+                        containerClassName="flex-1"
+                      />
+                      <div className="flex items-center gap-2 pb-1">
+                        {editingDateKey === `val:${usdBcv.valuationDate}` ? (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={editingRateValue}
+                              onChange={(e) => setEditingRateValue(e.target.value)}
+                              placeholder="Tasa BCV"
+                              className="w-28 rounded-lg border border-base-500 bg-base-800 px-2.5 py-1.5 text-xs text-white focus:border-sky-400 focus:outline-none"
+                            />
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="primary"
+                              loading={upsertBcvRate.isPending}
+                              onClick={() => void handleSaveBcvRate(usdBcv.valuationDate)}
+                              title="Guardar tasa"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => setEditingDateKey(null)}
+                              title="Cancelar"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="rounded-xl border border-base-600 bg-base-800/80 px-3 py-2 text-xs">
+                              <span className="text-slate-400">Tasa BCV ({usdBcv.valuationDate}): </span>
+                              <span className="font-semibold text-white">
+                                {formatBcvRate(usdBcv.valuationRate)}
+                              </span>
+                              {usdBcv.valuationRateSource && (
+                                <span
+                                  className={`ml-2 inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${RATE_SOURCE_META[usdBcv.valuationRateSource].className}`}
+                                >
+                                  {RATE_SOURCE_META[usdBcv.valuationRateSource].label}
+                                </span>
+                              )}
+                            </div>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              title="Editar tasa BCV de la fecha de referencia"
+                              onClick={() =>
+                                startEditRate(`val:${usdBcv.valuationDate}`, usdBcv.valuationRate)
+                              }
+                            >
+                              <Pencil className="h-3.5 w-3.5 text-slate-300" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-xl border border-base-600/80 bg-base-800/50 p-3.5">
+                        <p className="text-xs text-slate-400">Total Ingresado (Bs → USD)</p>
+                        <p className="mt-1 text-xs font-medium text-slate-300 tabular">
+                          {formatBs(usdBcv.allAtValuationDate.totalInflowBs)}
+                        </p>
+                        <p className="mt-0.5 font-display text-xl font-bold text-sky-300 tabular">
+                          {usdBcv.allAtValuationDate.totalInflowUsdAtDate !== null
+                            ? formatUsd(usdBcv.allAtValuationDate.totalInflowUsdAtDate)
+                            : 'Sin tasa BCV'}
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5">
+                        <p className="text-xs text-slate-400">Saldo Neto en Cuenta (Bs → USD)</p>
+                        <p className="mt-1 text-xs font-medium text-slate-300 tabular">
+                          {formatBs(usdBcv.allAtValuationDate.netBalanceBs)}
+                        </p>
+                        <p className="mt-0.5 font-display text-xl font-bold text-emerald-300 tabular">
+                          {usdBcv.allAtValuationDate.netBalanceUsdAtDate !== null
+                            ? formatUsd(usdBcv.allAtValuationDate.netBalanceUsdAtDate)
+                            : 'Sin tasa BCV'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+
+                {/* Bloque 3: Suma de Ingresos por Día (Tasa Histórica Diaria) */}
+                <Card className="border-amber-500/30 bg-base-900/80">
+                  <CardHeader
+                    title="Suma de ingresos por día (tasa histórica)"
+                    description="Acumula Día 1 Bs / tasa Día 1 + Día 2 Bs / tasa Día 2 + … con la tasa BCV real de cada jornada."
+                    icon={<Scale className="h-5 w-5 text-amber-400" />}
+                  />
+                  <div className="space-y-4">
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+                      <p className="text-xs text-slate-400">
+                        Total ingresado sumado por tasa diaria
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-baseline justify-between gap-2">
+                        <p className="font-display text-2xl font-bold text-amber-300 tabular">
+                          {formatUsd(usdBcv.summedByDailyRate.totalInflowUsdDailySum)}
+                        </p>
+                        <span className="text-xs text-slate-300 tabular">
+                          Base: {formatBs(usdBcv.summedByDailyRate.totalInflowBs)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-base-600/80 bg-base-800/50 p-3.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-slate-400">
+                          Diferencia cambiaria vs. tasa del {usdBcv.valuationDate}
+                        </span>
+                        <span
+                          className={`text-sm font-bold tabular ${
+                            usdBcv.summedByDailyRate.exchangeDiffUsd === null
+                              ? 'text-slate-400'
+                              : usdBcv.summedByDailyRate.exchangeDiffUsd >= 0
+                                ? 'text-emerald-400'
+                                : 'text-rose-400'
+                          }`}
+                        >
+                          {usdBcv.summedByDailyRate.exchangeDiffUsd === null
+                            ? '—'
+                            : `${usdBcv.summedByDailyRate.exchangeDiffUsd >= 0 ? '+' : '-'}${formatUsd(
+                                Math.abs(usdBcv.summedByDailyRate.exchangeDiffUsd)
+                              )}`}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        {usdBcv.summedByDailyRate.exchangeDiffUsd === null
+                          ? 'Asigna una tasa BCV a la fecha de referencia para calcular el efecto cambiario.'
+                          : usdBcv.summedByDailyRate.exchangeDiffUsd < 0
+                            ? 'La devaluación redujo el valor en USD de los bolívares ingresados frente a su valor histórico diario.'
+                            : 'El equivalente a la tasa de referencia supera o iguala la suma histórica diaria.'}
+                      </p>
+                      {usdBcv.summedByDailyRate.unresolvedDaysCount > 0 && (
+                        <p className="mt-2 text-xs font-medium text-amber-300">
+                          ⚠️ {usdBcv.summedByDailyRate.unresolvedDaysCount} día(s) con ingresos aún no tienen tasa BCV asignada; edítalos en la tabla de abajo.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              </div>
+
+              {/* Bloque 1: Filtro por Día (Detalle Diario) */}
+              <Card>
+                <CardHeader
+                  title="Filtro por día (detalle diario)"
+                  description="Consulta cuánto entró cada día en Bs y su equivalente en USD a la tasa BCV real de esa fecha."
+                  icon={<TrendingUp className="h-5 w-5 text-emerald-400" />}
+                />
+
+                <div className="mb-4 grid gap-3 sm:grid-cols-4">
+                  <Input
+                    label="Día puntual"
+                    type="date"
+                    value={selectedDay}
+                    onChange={(e) => setSelectedDay(e.target.value)}
+                  />
+                  <Input
+                    label="Rango desde"
+                    type="date"
+                    value={dailyRangeFrom}
+                    disabled={Boolean(selectedDay)}
+                    onChange={(e) => setDailyRangeFrom(e.target.value)}
+                  />
+                  <Input
+                    label="Rango hasta"
+                    type="date"
+                    value={dailyRangeTo}
+                    disabled={Boolean(selectedDay)}
+                    onChange={(e) => setDailyRangeTo(e.target.value)}
+                  />
+                  <div className="flex items-end">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="md"
+                      fullWidth
+                      disabled={!selectedDay && !dailyRangeFrom && !dailyRangeTo}
+                      onClick={() => {
+                        setSelectedDay('');
+                        setDailyRangeFrom('');
+                        setDailyRangeTo('');
+                      }}
+                    >
+                      Limpiar filtro
+                    </Button>
+                  </div>
+                </div>
+
+                {selectedDay && (
+                  <div className="mb-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3.5 text-sm text-emerald-100">
+                    {selectedDayRow ? (
+                      selectedDayRow.bcvRate ? (
+                        <span>
+                          El <strong>{selectedDay}</strong> a tasa BCV{' '}
+                          <strong>{formatBcvRate(selectedDayRow.bcvRate)}</strong> entraron{' '}
+                          <strong>{formatBs(selectedDayRow.inflowBs)}</strong> ={' '}
+                          <strong className="text-emerald-300">
+                            {formatUsd(selectedDayRow.inflowUsd)} USD
+                          </strong>
+                        </span>
+                      ) : (
+                        <span>
+                          El <strong>{selectedDay}</strong> entraron{' '}
+                          <strong>{formatBs(selectedDayRow.inflowBs)}</strong>, pero no hay tasa BCV registrada para ese día. Usa el botón de lápiz para fijarla.
+                        </span>
+                      )
+                    ) : (
+                      <span>
+                        El <strong>{selectedDay}</strong> no se registraron ingresos en esta cuenta.
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {filteredDailyRows.length === 0 ? (
+                  <EmptyState
+                    icon={<Calendar className="h-8 w-8 text-slate-500" />}
+                    title="Sin registros diarios en este filtro"
+                    description="Selecciona otro día o limpia el filtro para ver el desglose diario."
+                  />
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[640px] text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-base-600 text-xs uppercase tracking-wider text-slate-400">
+                          <th className="py-2.5 pr-3">Fecha (Caracas)</th>
+                          <th className="py-2.5 pr-3">Tasa BCV Real</th>
+                          <th className="py-2.5 pr-3 text-right">Ingresos (Bs)</th>
+                          <th className="py-2.5 pr-3 text-right">Equivalente (USD BCV)</th>
+                          <th className="py-2.5 text-right">Editar tasa</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-base-700/70">
+                        {filteredDailyRows.map((row) => {
+                          const isEditing = editingDateKey === row.dateKey;
+                          const sourceMeta = row.rateSource ? RATE_SOURCE_META[row.rateSource] : null;
+                          return (
+                            <tr key={row.dateKey} className="hover:bg-base-800/50">
+                              <td className="whitespace-nowrap py-3 pr-3 font-mono text-xs text-slate-200">
+                                {row.dateKey}
+                                <span className="ml-2 text-[11px] text-slate-400">
+                                  ({row.inflowCount} ing.)
+                                </span>
+                              </td>
+                              <td className="py-3 pr-3">
+                                {isEditing ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={editingRateValue}
+                                      onChange={(e) => setEditingRateValue(e.target.value)}
+                                      placeholder="Ej: 54.23"
+                                      className="w-28 rounded-lg border border-base-500 bg-base-800 px-2.5 py-1 text-xs text-white focus:border-emerald-400 focus:outline-none"
+                                    />
+                                    <Button
+                                      type="button"
+                                      size="icon"
+                                      variant="primary"
+                                      loading={upsertBcvRate.isPending}
+                                      onClick={() => void handleSaveBcvRate(row.dateKey)}
+                                      title="Guardar tasa BCV"
+                                    >
+                                      <Check className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="icon"
+                                      variant="ghost"
+                                      onClick={() => setEditingDateKey(null)}
+                                      title="Cancelar"
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-semibold text-white tabular">
+                                      {formatBcvRate(row.bcvRate)}
+                                    </span>
+                                    {sourceMeta && (
+                                      <span
+                                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${sourceMeta.className}`}
+                                        title={
+                                          row.carriedFromDateKey
+                                            ? `Heredada de ${row.carriedFromDateKey}`
+                                            : undefined
+                                        }
+                                      >
+                                        {sourceMeta.label}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="whitespace-nowrap py-3 pr-3 text-right font-semibold text-emerald-400 tabular">
+                                {formatBs(row.inflowBs)}
+                              </td>
+                              <td className="whitespace-nowrap py-3 pr-3 text-right font-semibold text-sky-300 tabular">
+                                {row.inflowUsd !== null ? formatUsd(row.inflowUsd) : '—'}
+                              </td>
+                              <td className="py-3 text-right">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  title={`Editar tasa BCV real del ${row.dateKey}`}
+                                  aria-label={`Editar tasa BCV real del ${row.dateKey}`}
+                                  onClick={() => startEditRate(row.dateKey, row.bcvRate)}
+                                >
+                                  <Pencil className="h-4 w-4 text-slate-300" />
+                                </Button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+            </section>
+          )}
+
           <div className="grid gap-6 xl:grid-cols-3">
             <Card className="xl:col-span-1">
               <CardHeader
@@ -361,7 +901,7 @@ export function AdminBankLedger() {
                     size="sm"
                     leftIcon={<Download className="h-4 w-4" />}
                     disabled={movements.length === 0}
-                    onClick={() => downloadCsv(movements, summary.accountKey, summary)}
+                    onClick={() => downloadCsv(movements, summary.accountKey, summary, usdBcv)}
                   >
                     Exportar CSV
                   </Button>

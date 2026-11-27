@@ -34,6 +34,7 @@ import {
 } from './services/centralOneCatalogSync';
 import { expireStaleOrders, refundStaleReviewOrders } from './services/orders';
 import { refreshAutoRate, alertStaleRate } from './services/rate';
+import { ensureTodayBcvRate } from './services/bcvRates';
 import { resolveProcessingOrders } from './services/dispatch';
 import { runWinbackEmails } from './services/winbackEmail';
 import { STORE_TIMEZONE } from './services/stats';
@@ -165,6 +166,7 @@ export const refreshRate = onSchedule(
     secrets: [PABILO_API_KEY, TELEGRAM_BOT_TOKEN],
   },
   async () => {
+    await ensureTodayBcvRate();
     const result = await refreshAutoRate();
     log.info('Refresco de tasa', { ...result });
 

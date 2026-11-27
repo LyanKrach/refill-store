@@ -50,6 +50,7 @@ import { listEvents } from '../services/orderEvents';
 import { getConfig, updateConfig } from '../services/settings';
 import * as settings from '../services/settings';
 import * as bankLedgerService from '../services/bankLedger';
+import * as bcvRatesService from '../services/bcvRates';
 import { seedCatalog } from '../seed/catalog.seed';
 import * as alertsService from '../services/adminAlerts';
 import * as emailService from '../services/email';
@@ -2823,6 +2824,15 @@ const bankLedgerQuerySchema = z.object({
   accountKey: z.string().trim().min(3).max(80).optional(),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  valuationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+const bcvRateParamSchema = z.object({
+  dateKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+const upsertBcvRateSchema = z.object({
+  rate: z.coerce.number().positive().finite(),
 });
 
 const createWithdrawalSchema = z.object({
@@ -2902,6 +2912,39 @@ adminRouter.delete(
     });
 
     ok(res, { deleted: true, id: deleted.id });
+  })
+);
+
+adminRouter.put(
+  '/bank-ledger/bcv-rates/:dateKey',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { dateKey } = parseParams(req, bcvRateParamSchema);
+    const body = parseBody(req, upsertBcvRateSchema);
+    const actor = currentUser(req);
+    const { saved, previousRate } = await bcvRatesService.setManualBcvRate(
+      dateKey,
+      body.rate,
+      actor.email || actor.uid
+    );
+
+    await audit.record({
+      action: audit.ACTIONS.BANK_LEDGER_BCV_RATE_UPDATED,
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      targetType: 'bcvRates',
+      targetId: dateKey,
+      summary: `Tasa BCV real manual para ${dateKey}: ${saved.rate.toFixed(4)} Bs/USD${previousRate ? ` (antes ${previousRate.toFixed(4)})` : ''}.`,
+      data: {
+        dateKey,
+        previousRate,
+        rate: saved.rate,
+        source: saved.source,
+      },
+      ip: clientIp(req),
+    });
+
+    ok(res, { rate: saved });
   })
 );
 

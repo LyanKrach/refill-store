@@ -102,4 +102,5 @@ export const ACTIONS = {
   ADMIN_EMAIL_CHANGED: 'admin.email.changed',
   BANK_LEDGER_WITHDRAWAL_CREATED: 'bank_ledger.withdrawal.created',
   BANK_LEDGER_WITHDRAWAL_DELETED: 'bank_ledger.withdrawal.deleted',
+  BANK_LEDGER_BCV_RATE_UPDATED: 'bank_ledger.bcv_rate.updated',
 } as const;
