@@ -392,7 +392,7 @@ export function AdminBankLedger() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="font-display text-2xl font-bold text-white">Caja Bs (Cuentas)</h1>
@@ -401,14 +401,14 @@ export function AdminBankLedger() {
           </p>
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
           {accountOptions.length > 0 && (
             <Select
               label="Cuenta bancaria"
               value={activeKey}
               onChange={(e) => setSelectedAccount(e.target.value)}
               options={accountOptions}
-              containerClassName="sm:min-w-[340px]"
+              containerClassName="min-w-0 sm:min-w-[340px]"
             />
           )}
           <Button
@@ -478,7 +478,7 @@ export function AdminBankLedger() {
           </div>
 
           {usdBcv && (
-            <section className="space-y-4 rounded-2xl border border-base-600/80 bg-base-900/50 p-5">
+            <section className="min-w-0 space-y-4 rounded-2xl border border-base-600/80 bg-base-900/50 p-3.5 sm:p-5">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="flex items-center gap-2 font-display text-lg font-bold text-white">
@@ -493,7 +493,7 @@ export function AdminBankLedger() {
 
               <div className="grid gap-4 lg:grid-cols-2">
                 {/* Bloque 2: Todo el Total a la Tasa de un Día */}
-                <Card className="border-sky-500/30 bg-base-900/80">
+                <Card className="min-w-0 border-sky-500/30 bg-base-900/80">
                   <CardHeader
                     title="Todo el total a la tasa de un día"
                     description="Valora todo el histórico ingresado y el saldo neto actual usando una única tasa BCV real."
@@ -506,18 +506,19 @@ export function AdminBankLedger() {
                         type="date"
                         value={valuationDate || usdBcv.valuationDate}
                         onChange={(e) => setValuationDate(e.target.value)}
-                        containerClassName="flex-1"
+                        containerClassName="min-w-0 flex-1"
+                        className="max-w-full"
                       />
-                      <div className="flex items-center gap-2 pb-1">
+                      <div className="flex min-w-0 items-center gap-2 pb-1">
                         {editingDateKey === `val:${usdBcv.valuationDate}` ? (
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex min-w-0 flex-1 items-center gap-1.5">
                             <input
                               type="text"
                               inputMode="decimal"
                               value={editingRateValue}
                               onChange={(e) => setEditingRateValue(e.target.value)}
                               placeholder="Tasa BCV"
-                              className="w-28 rounded-lg border border-base-500 bg-base-800 px-2.5 py-1.5 text-xs text-white focus:border-sky-400 focus:outline-none"
+                              className="min-w-0 flex-1 rounded-lg border border-base-500 bg-base-800 px-2.5 py-1.5 text-xs text-white focus:border-sky-400 focus:outline-none sm:w-28 sm:flex-none"
                             />
                             <Button
                               type="button"
@@ -541,14 +542,14 @@ export function AdminBankLedger() {
                           </div>
                         ) : (
                           <>
-                            <div className="rounded-xl border border-base-600 bg-base-800/80 px-3 py-2 text-xs">
+                            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 rounded-xl border border-base-600 bg-base-800/80 px-3 py-2 text-xs">
                               <span className="text-slate-400">Tasa BCV ({usdBcv.valuationDate}): </span>
                               <span className="font-semibold text-white">
                                 {formatBcvRate(usdBcv.valuationRate)}
                               </span>
                               {usdBcv.valuationRateSource && (
                                 <span
-                                  className={`ml-2 inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${RATE_SOURCE_META[usdBcv.valuationRateSource].className}`}
+                                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${RATE_SOURCE_META[usdBcv.valuationRateSource].className}`}
                                 >
                                   {RATE_SOURCE_META[usdBcv.valuationRateSource].label}
                                 </span>
@@ -558,6 +559,7 @@ export function AdminBankLedger() {
                               type="button"
                               size="icon"
                               variant="ghost"
+                              className="shrink-0"
                               title="Editar tasa BCV de la fecha de referencia"
                               onClick={() =>
                                 startEditRate(`val:${usdBcv.valuationDate}`, usdBcv.valuationRate)
@@ -598,7 +600,7 @@ export function AdminBankLedger() {
                 </Card>
 
                 {/* Bloque 3: Suma de Ingresos por Día (Tasa Histórica Diaria) */}
-                <Card className="border-amber-500/30 bg-base-900/80">
+                <Card className="min-w-0 border-amber-500/30 bg-base-900/80">
                   <CardHeader
                     title="Suma de ingresos por día (tasa histórica)"
                     description="Acumula Día 1 Bs / tasa Día 1 + Día 2 Bs / tasa Día 2 + … con la tasa BCV real de cada jornada."
@@ -620,7 +622,7 @@ export function AdminBankLedger() {
                     </div>
 
                     <div className="rounded-xl border border-base-600/80 bg-base-800/50 p-3.5">
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-xs text-slate-400">
                           Diferencia cambiaria vs. tasa del {usdBcv.valuationDate}
                         </span>
@@ -658,14 +660,14 @@ export function AdminBankLedger() {
               </div>
 
               {/* Bloque 1: Filtro por Día (Detalle Diario) */}
-              <Card>
+              <Card className="min-w-0">
                 <CardHeader
                   title="Filtro por día (detalle diario)"
                   description="Consulta cuánto entró cada día en Bs y su equivalente en USD a la tasa BCV real de esa fecha."
                   icon={<TrendingUp className="h-5 w-5 text-emerald-400" />}
                 />
 
-                <div className="mb-4 grid gap-3 sm:grid-cols-4">
+                <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <Input
                     label="Día puntual"
                     type="date"
@@ -705,7 +707,7 @@ export function AdminBankLedger() {
                 </div>
 
                 {selectedDay && (
-                  <div className="mb-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3.5 text-sm text-emerald-100">
+                  <div className="mb-4 break-words rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3.5 text-sm text-emerald-100">
                     {selectedDayRow ? (
                       selectedDayRow.bcvRate ? (
                         <span>
@@ -737,111 +739,218 @@ export function AdminBankLedger() {
                     description="Selecciona otro día o limpia el filtro para ver el desglose diario."
                   />
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[640px] text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-base-600 text-xs uppercase tracking-wider text-slate-400">
-                          <th className="py-2.5 pr-3">Fecha (Caracas)</th>
-                          <th className="py-2.5 pr-3">Tasa BCV Real</th>
-                          <th className="py-2.5 pr-3 text-right">Ingresos (Bs)</th>
-                          <th className="py-2.5 pr-3 text-right">Equivalente (USD BCV)</th>
-                          <th className="py-2.5 text-right">Editar tasa</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-base-700/70">
-                        {filteredDailyRows.map((row) => {
-                          const isEditing = editingDateKey === row.dateKey;
-                          const sourceMeta = row.rateSource ? RATE_SOURCE_META[row.rateSource] : null;
-                          return (
-                            <tr key={row.dateKey} className="hover:bg-base-800/50">
-                              <td className="whitespace-nowrap py-3 pr-3 font-mono text-xs text-slate-200">
-                                {row.dateKey}
-                                <span className="ml-2 text-[11px] text-slate-400">
+                  <>
+                    <div className="space-y-2.5 md:hidden">
+                      {filteredDailyRows.map((row) => {
+                        const isEditing = editingDateKey === row.dateKey;
+                        const sourceMeta = row.rateSource ? RATE_SOURCE_META[row.rateSource] : null;
+                        return (
+                          <div
+                            key={row.dateKey}
+                            className="rounded-xl border border-base-600/80 bg-base-900/70 p-3.5"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                                <span className="font-mono text-xs font-semibold text-slate-200">
+                                  {row.dateKey}
+                                </span>
+                                <span className="text-[11px] text-slate-400">
                                   ({row.inflowCount} ing.)
                                 </span>
-                              </td>
-                              <td className="py-3 pr-3">
-                                {isEditing ? (
-                                  <div className="flex items-center gap-1.5">
-                                    <input
-                                      type="text"
-                                      inputMode="decimal"
-                                      value={editingRateValue}
-                                      onChange={(e) => setEditingRateValue(e.target.value)}
-                                      placeholder="Ej: 54.23"
-                                      className="w-28 rounded-lg border border-base-500 bg-base-800 px-2.5 py-1 text-xs text-white focus:border-emerald-400 focus:outline-none"
-                                    />
-                                    <Button
-                                      type="button"
-                                      size="icon"
-                                      variant="primary"
-                                      loading={upsertBcvRate.isPending}
-                                      onClick={() => void handleSaveBcvRate(row.dateKey)}
-                                      title="Guardar tasa BCV"
-                                    >
-                                      <Check className="h-3.5 w-3.5" />
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      size="icon"
-                                      variant="ghost"
-                                      onClick={() => setEditingDateKey(null)}
-                                      title="Cancelar"
-                                    >
-                                      <X className="h-3.5 w-3.5" />
-                                    </Button>
-                                  </div>
-                                ) : (
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <span className="font-semibold text-white tabular">
-                                      {formatBcvRate(row.bcvRate)}
-                                    </span>
-                                    {sourceMeta && (
-                                      <span
-                                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${sourceMeta.className}`}
-                                        title={
-                                          row.carriedFromDateKey
-                                            ? `Heredada de ${row.carriedFromDateKey}`
-                                            : undefined
-                                        }
-                                      >
-                                        {sourceMeta.label}
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                              </td>
-                              <td className="whitespace-nowrap py-3 pr-3 text-right font-semibold text-emerald-400 tabular">
-                                {formatBs(row.inflowBs)}
-                              </td>
-                              <td className="whitespace-nowrap py-3 pr-3 text-right font-semibold text-sky-300 tabular">
-                                {row.inflowUsd !== null ? formatUsd(row.inflowUsd) : '—'}
-                              </td>
-                              <td className="py-3 text-right">
+                              </div>
+                              {!isEditing && (
                                 <Button
                                   type="button"
                                   variant="ghost"
                                   size="icon"
+                                  className="h-8 w-8 shrink-0"
                                   title={`Editar tasa BCV real del ${row.dateKey}`}
                                   aria-label={`Editar tasa BCV real del ${row.dateKey}`}
                                   onClick={() => startEditRate(row.dateKey, row.bcvRate)}
                                 >
                                   <Pencil className="h-4 w-4 text-slate-300" />
                                 </Button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                              )}
+                            </div>
+
+                            <div className="mt-2.5 grid grid-cols-2 gap-2.5 rounded-lg border border-base-700/70 bg-base-800/50 p-2.5">
+                              <div className="min-w-0">
+                                <p className="text-[11px] text-slate-400">Ingresos (Bs)</p>
+                                <p className="mt-0.5 break-words text-sm font-semibold text-emerald-400 tabular">
+                                  {formatBs(row.inflowBs)}
+                                </p>
+                              </div>
+                              <div className="min-w-0 text-right">
+                                <p className="text-[11px] text-slate-400">Equivalente (USD)</p>
+                                <p className="mt-0.5 text-sm font-semibold text-sky-300 tabular">
+                                  {row.inflowUsd !== null ? formatUsd(row.inflowUsd) : '—'}
+                                </p>
+                              </div>
+                            </div>
+
+                            {isEditing ? (
+                              <div className="mt-2.5 flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={editingRateValue}
+                                  onChange={(e) => setEditingRateValue(e.target.value)}
+                                  placeholder="Ej: 54.23"
+                                  className="min-w-0 flex-1 rounded-lg border border-base-500 bg-base-800 px-2.5 py-1.5 text-xs text-white focus:border-emerald-400 focus:outline-none"
+                                />
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="primary"
+                                  loading={upsertBcvRate.isPending}
+                                  onClick={() => void handleSaveBcvRate(row.dateKey)}
+                                  title="Guardar tasa BCV"
+                                >
+                                  <Check className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => setEditingDateKey(null)}
+                                  title="Cancelar"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                                <span className="text-slate-400">Tasa BCV Real</span>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="font-semibold text-white tabular">
+                                    {formatBcvRate(row.bcvRate)}
+                                  </span>
+                                  {sourceMeta && (
+                                    <span
+                                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${sourceMeta.className}`}
+                                      title={
+                                        row.carriedFromDateKey
+                                          ? `Heredada de ${row.carriedFromDateKey}`
+                                          : undefined
+                                      }
+                                    >
+                                      {sourceMeta.label}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="hidden overflow-x-auto md:block">
+                      <table className="w-full min-w-[640px] text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-base-600 text-xs uppercase tracking-wider text-slate-400">
+                            <th className="py-2.5 pr-3">Fecha (Caracas)</th>
+                            <th className="py-2.5 pr-3">Tasa BCV Real</th>
+                            <th className="py-2.5 pr-3 text-right">Ingresos (Bs)</th>
+                            <th className="py-2.5 pr-3 text-right">Equivalente (USD BCV)</th>
+                            <th className="py-2.5 text-right">Editar tasa</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-base-700/70">
+                          {filteredDailyRows.map((row) => {
+                            const isEditing = editingDateKey === row.dateKey;
+                            const sourceMeta = row.rateSource ? RATE_SOURCE_META[row.rateSource] : null;
+                            return (
+                              <tr key={row.dateKey} className="hover:bg-base-800/50">
+                                <td className="whitespace-nowrap py-3 pr-3 font-mono text-xs text-slate-200">
+                                  {row.dateKey}
+                                  <span className="ml-2 text-[11px] text-slate-400">
+                                    ({row.inflowCount} ing.)
+                                  </span>
+                                </td>
+                                <td className="py-3 pr-3">
+                                  {isEditing ? (
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={editingRateValue}
+                                        onChange={(e) => setEditingRateValue(e.target.value)}
+                                        placeholder="Ej: 54.23"
+                                        className="w-28 rounded-lg border border-base-500 bg-base-800 px-2.5 py-1 text-xs text-white focus:border-emerald-400 focus:outline-none"
+                                      />
+                                      <Button
+                                        type="button"
+                                        size="icon"
+                                        variant="primary"
+                                        loading={upsertBcvRate.isPending}
+                                        onClick={() => void handleSaveBcvRate(row.dateKey)}
+                                        title="Guardar tasa BCV"
+                                      >
+                                        <Check className="h-3.5 w-3.5" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() => setEditingDateKey(null)}
+                                        title="Cancelar"
+                                      >
+                                        <X className="h-3.5 w-3.5" />
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="font-semibold text-white tabular">
+                                        {formatBcvRate(row.bcvRate)}
+                                      </span>
+                                      {sourceMeta && (
+                                        <span
+                                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${sourceMeta.className}`}
+                                          title={
+                                            row.carriedFromDateKey
+                                              ? `Heredada de ${row.carriedFromDateKey}`
+                                              : undefined
+                                          }
+                                        >
+                                          {sourceMeta.label}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="whitespace-nowrap py-3 pr-3 text-right font-semibold text-emerald-400 tabular">
+                                  {formatBs(row.inflowBs)}
+                                </td>
+                                <td className="whitespace-nowrap py-3 pr-3 text-right font-semibold text-sky-300 tabular">
+                                  {row.inflowUsd !== null ? formatUsd(row.inflowUsd) : '—'}
+                                </td>
+                                <td className="py-3 text-right">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    title={`Editar tasa BCV real del ${row.dateKey}`}
+                                    aria-label={`Editar tasa BCV real del ${row.dateKey}`}
+                                    onClick={() => startEditRate(row.dateKey, row.bcvRate)}
+                                  >
+                                    <Pencil className="h-4 w-4 text-slate-300" />
+                                  </Button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
               </Card>
             </section>
           )}
 
           <div className="grid gap-6 xl:grid-cols-3">
-            <Card className="xl:col-span-1">
+            <Card className="min-w-0 xl:col-span-1">
               <CardHeader
                 title="Registrar retiro"
                 description={`Descuenta Bs retirados de ${summary.cedula} · ${summary.phone}`}
@@ -885,8 +994,9 @@ export function AdminBankLedger() {
               </form>
             </Card>
 
-            <Card className="xl:col-span-2">
+            <Card className="min-w-0 xl:col-span-2">
               <CardHeader
+                className="flex-col gap-3 sm:flex-row sm:items-start"
                 title="Movimientos de la cuenta"
                 description={
                   fromDate || toDate
@@ -945,86 +1055,168 @@ export function AdminBankLedger() {
                   description="Cuando entren pagos verificados o registres un retiro aparecerán aquí."
                 />
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[680px] text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-base-600 text-xs uppercase tracking-wider text-slate-400">
-                        <th className="py-2.5 pr-3">Fecha / Hora</th>
-                        <th className="py-2.5 pr-3">Origen</th>
-                        <th className="py-2.5 pr-3">Referencia</th>
-                        <th className="py-2.5 pr-3">Orden / Nota</th>
-                        <th className="py-2.5 pr-3 text-right">Monto (Bs)</th>
-                        <th className="py-2.5 text-right">Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-base-700/70">
-                      {movements.map((entry) => {
-                        const isWithdrawal = entry.type === 'withdrawal';
-                        const badge = SOURCE_META[entry.source] ?? SOURCE_META.web;
-                        return (
-                          <tr key={entry.id} className="hover:bg-base-800/50">
-                            <td className="whitespace-nowrap py-3 pr-3 text-xs text-slate-300">
-                              {formatDateTime(entry.createdAt)}
-                            </td>
-                            <td className="py-3 pr-3">
-                              <span
-                                className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${badge.className}`}
-                              >
-                                {badge.label}
-                              </span>
-                            </td>
-                            <td className="py-3 pr-3 font-mono text-xs text-slate-300">
-                              {entry.reference || '—'}
-                            </td>
-                            <td className="py-3 pr-3 text-xs text-slate-300">
-                              <div className="flex flex-col gap-0.5">
-                                {entry.orderId && (
-                                  <Link
-                                    to={ROUTES.adminOrder(entry.orderId)}
-                                    className="font-semibold text-neon-ice hover:underline"
-                                  >
-                                    {entry.orderCode || entry.orderId}
-                                  </Link>
-                                )}
-                                {entry.note && (
-                                  <span className="text-slate-400">{entry.note}</span>
-                                )}
-                                {!entry.orderId && !entry.note && (
-                                  <span className="text-slate-500">—</span>
-                                )}
-                              </div>
-                            </td>
-                            <td
-                              className={`whitespace-nowrap py-3 pr-3 text-right font-semibold tabular ${
+                <>
+                  <div className="space-y-3 md:hidden">
+                    {movements.map((entry) => {
+                      const isWithdrawal = entry.type === 'withdrawal';
+                      const badge = SOURCE_META[entry.source] ?? SOURCE_META.web;
+                      return (
+                        <article
+                          key={entry.id}
+                          className="rounded-xl border border-base-600/80 bg-base-900/70 p-3.5"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${badge.className}`}
+                            >
+                              {badge.label}
+                            </span>
+                            <span
+                              className={`shrink-0 text-base font-bold tabular ${
                                 isWithdrawal ? 'text-rose-400' : 'text-emerald-400'
                               }`}
                             >
                               {isWithdrawal ? '-' : '+'}
                               {formatBs(entry.amountBs)}
-                            </td>
-                            <td className="py-3 text-right">
-                              {isWithdrawal ? (
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  title="Eliminar retiro"
-                                  aria-label="Eliminar retiro"
-                                  loading={deleteWithdrawal.isPending}
-                                  onClick={() => void handleDeleteWithdrawal(entry)}
+                            </span>
+                          </div>
+
+                          <div className="mt-2.5 space-y-1.5">
+                            {(entry.orderId || entry.reference) && (
+                              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+                                {entry.orderId && (
+                                  <Link
+                                    to={ROUTES.adminOrder(entry.orderId)}
+                                    className="break-all font-semibold text-neon-ice hover:underline"
+                                  >
+                                    {entry.orderCode || entry.orderId}
+                                  </Link>
+                                )}
+                                {entry.reference ? (
+                                  <span className="break-all font-mono text-xs text-slate-300">
+                                    Ref: {entry.reference}
+                                  </span>
+                                ) : entry.orderId ? (
+                                  <span className="font-mono text-xs text-slate-500">Ref: —</span>
+                                ) : null}
+                              </div>
+                            )}
+                            {entry.note && (
+                              <p className="whitespace-normal break-words text-xs leading-relaxed text-slate-300">
+                                {entry.note}
+                              </p>
+                            )}
+                            {!entry.orderId && !entry.reference && !entry.note && (
+                              <p className="text-xs text-slate-500">—</p>
+                            )}
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-between gap-2 border-t border-base-700/70 pt-2.5">
+                            <span className="text-[11px] text-slate-400">
+                              {formatDateTime(entry.createdAt)}
+                            </span>
+                            {isWithdrawal && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                title="Eliminar retiro"
+                                aria-label="Eliminar retiro"
+                                loading={deleteWithdrawal.isPending}
+                                onClick={() => void handleDeleteWithdrawal(entry)}
+                                className="h-8 shrink-0 px-2.5 text-xs text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
+                                leftIcon={<Trash2 className="h-3.5 w-3.5" />}
+                              >
+                                Eliminar
+                              </Button>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+
+                  <div className="hidden overflow-x-auto md:block">
+                    <table className="w-full min-w-[680px] text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-base-600 text-xs uppercase tracking-wider text-slate-400">
+                          <th className="py-2.5 pr-3">Fecha / Hora</th>
+                          <th className="py-2.5 pr-3">Origen</th>
+                          <th className="py-2.5 pr-3">Referencia</th>
+                          <th className="py-2.5 pr-3">Orden / Nota</th>
+                          <th className="py-2.5 pr-3 text-right">Monto (Bs)</th>
+                          <th className="py-2.5 text-right">Acción</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-base-700/70">
+                        {movements.map((entry) => {
+                          const isWithdrawal = entry.type === 'withdrawal';
+                          const badge = SOURCE_META[entry.source] ?? SOURCE_META.web;
+                          return (
+                            <tr key={entry.id} className="hover:bg-base-800/50">
+                              <td className="whitespace-nowrap py-3 pr-3 text-xs text-slate-300">
+                                {formatDateTime(entry.createdAt)}
+                              </td>
+                              <td className="py-3 pr-3">
+                                <span
+                                  className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${badge.className}`}
                                 >
-                                  <Trash2 className="h-4 w-4 text-rose-400" />
-                                </Button>
-                              ) : (
-                                <span className="text-xs text-slate-600">—</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                                  {badge.label}
+                                </span>
+                              </td>
+                              <td className="py-3 pr-3 font-mono text-xs text-slate-300">
+                                {entry.reference || '—'}
+                              </td>
+                              <td className="py-3 pr-3 text-xs text-slate-300">
+                                <div className="flex flex-col gap-0.5">
+                                  {entry.orderId && (
+                                    <Link
+                                      to={ROUTES.adminOrder(entry.orderId)}
+                                      className="font-semibold text-neon-ice hover:underline"
+                                    >
+                                      {entry.orderCode || entry.orderId}
+                                    </Link>
+                                  )}
+                                  {entry.note && (
+                                    <span className="text-slate-400">{entry.note}</span>
+                                  )}
+                                  {!entry.orderId && !entry.note && (
+                                    <span className="text-slate-500">—</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td
+                                className={`whitespace-nowrap py-3 pr-3 text-right font-semibold tabular ${
+                                  isWithdrawal ? 'text-rose-400' : 'text-emerald-400'
+                                }`}
+                              >
+                                {isWithdrawal ? '-' : '+'}
+                                {formatBs(entry.amountBs)}
+                              </td>
+                              <td className="py-3 text-right">
+                                {isWithdrawal ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Eliminar retiro"
+                                    aria-label="Eliminar retiro"
+                                    loading={deleteWithdrawal.isPending}
+                                    onClick={() => void handleDeleteWithdrawal(entry)}
+                                  >
+                                    <Trash2 className="h-4 w-4 text-rose-400" />
+                                  </Button>
+                                ) : (
+                                  <span className="text-xs text-slate-600">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </Card>
           </div>
