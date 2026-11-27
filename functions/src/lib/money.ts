@@ -36,6 +36,26 @@ export function applyMargin(costUsd: number, marginPercent: number, roundStep = 
   return roundTo(raw, roundStep);
 }
 
+/**
+ * Aplica un margen porcentual sobre el costo garantizando un piso mínimo de
+ * ganancia en USD. Si `profitFloorUsd > 0`, `costUsd + profitFloorUsd` se
+ * redondea hacia arriba (`roundUpTo`) al paso configurado para que el redondeo
+ * nunca reduzca la ganancia por debajo del piso.
+ */
+export function applyMarginWithProfitFloor(
+  costUsd: number,
+  marginPercent: number,
+  profitFloorUsd = 0,
+  roundStep = 0.01
+): number {
+  const byMargin = applyMargin(costUsd, marginPercent, roundStep);
+  if (!Number.isFinite(profitFloorUsd) || profitFloorUsd <= 0) {
+    return byMargin;
+  }
+  const byFloor = roundUpTo(costUsd + profitFloorUsd, roundStep);
+  return Math.max(byMargin, byFloor);
+}
+
 export interface AmountCheck {
   /** `true` si lo transferido cubre el total de la orden. */
   ok: boolean;

@@ -34,6 +34,7 @@ require.cache[firebaseModulePath] = {
 };
 
 const sync = require('../lib/services/centralOneCatalogSync.js');
+const money = require('../lib/lib/money.js');
 
 /** Ítem de catálogo con valores por defecto razonables. */
 function item(overrides) {
@@ -992,7 +993,7 @@ test('planCentralOneCombos: propagación de stock y protección de precios perso
   });
   const c682Unlocked = resultUnlocked.combos[0];
   assert.equal(c682Unlocked.priceLocked, false);
-  assert.equal(c682Unlocked.priceUsd, 6.00);
+  assert.equal(c682Unlocked.priceUsd, 6.20);
 });
 
 test('Free Fire LATAM Pase Booyah: mapea el estándar como Pase Booyah y los 2 limitados con nombres distintos + LIMITADO', () => {
@@ -1286,4 +1287,355 @@ test('planFreeFireLevelUpCombo: suma exacta a 4 decimales y respeta priceLocked 
   assert.equal(oosCombo.inStock, false);
   assert.equal(oosCombo.availability, 'out_of_stock');
   assert.ok(oosCombo.priceUsd > 2.5439, 'recalcula precio si cost supera al priceLocked');
+});
+
+test('applyMarginWithProfitFloor: garantiza piso de ganancia mínimo redondeando hacia arriba sin alterar applyMargin', () => {
+  // Caso reportado: 100 diamantes con costo $0.6318 y margen 30%
+  assert.equal(money.applyMargin(0.6318, 30, 0.01), 0.82);
+  const price100 = money.applyMarginWithProfitFloor(0.6318, 30, 0.20, 0.01);
+  assert.equal(price100, 0.84);
+  assert.ok(money.round(price100 - 0.6318, 4) >= 0.20);
+
+  // Caso donde el margen % ya supera el piso ($1.00 * 1.30 = $1.30 -> ganancia $0.30 >= $0.20)
+  assert.equal(money.applyMarginWithProfitFloor(1.00, 30, 0.20, 0.01), 1.30);
+  assert.equal(money.applyMargin(1.00, 30, 0.01), 1.30);
+
+  // Redondeo hacia arriba al paso de 0.05
+  assert.equal(money.applyMarginWithProfitFloor(0.6318, 30, 0.20, 0.05), 0.85);
+
+  // Piso 0 o negativo mantiene el comportamiento exacto de applyMargin
+  assert.equal(money.applyMarginWithProfitFloor(0.6318, 30, 0, 0.01), 0.82);
+});
+
+test('Free Fire diamantes: pisos base, priceLocked y exclusión de tarjetas/pases/nivel/otros juegos', () => {
+  const ffPlan = { isFreeFireLatam: true, family: 'topup' };
+  const basePairs = [
+    [100, 0.20],
+    [310, 0.60],
+    [520, 1.00],
+    [1060, 2.00],
+    [2180, 4.00],
+    [5600, 10.00],
+  ];
+  const bonusPairs = [
+    [110, 0.20],
+    [341, 0.60],
+    [572, 1.00],
+    [1166, 2.00],
+    [2398, 4.00],
+    [6160, 10.00],
+  ];
+
+  for (const [amount, expectedFloor] of [...basePairs, ...bonusPairs]) {
+    assert.equal(
+      sync.freeFireOfferProfitFloor(ffPlan, { kind: 'package', amount, isFreeFireCard: false, isPin: false }),
+      expectedFloor,
+      `piso esperado para amount ${amount}`
+    );
+  }
+
+  // Paquete 100 con costo $0.6318 y margen 30% -> $0.84 (ganancia >= $0.20)
+  const floor100 = sync.freeFireOfferProfitFloor(ffPlan, { kind: 'package', amount: 100, isFreeFireCard: false, isPin: false });
+  const res100 = sync.resolveCentralOnePrice({
+    costUsd: 0.6318,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    profitFloorUsd: floor100,
+  });
+  assert.equal(res100.priceUsd, 0.84);
+  assert.ok(money.round(res100.priceUsd - 0.6318, 4) >= 0.20);
+
+  // priceLocked por debajo de costo + piso ($0.83 < $0.8318) -> se recalcula a $0.84
+  const lockedBelowFloor = sync.resolveCentralOnePrice({
+    costUsd: 0.6318,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    profitFloorUsd: floor100,
+    currentPriceUsd: 0.83,
+    priceLocked: true,
+  });
+  assert.equal(lockedBelowFloor.floorOverride, true);
+  assert.equal(lockedBelowFloor.priceUsd, 0.84);
+
+  // priceLocked >= costo + piso ($0.85 >= $0.8318) -> se respeta
+  const lockedAboveFloor = sync.resolveCentralOnePrice({
+    costUsd: 0.6318,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    profitFloorUsd: floor100,
+    currentPriceUsd: 0.85,
+    priceLocked: true,
+  });
+  assert.equal(lockedAboveFloor.floorOverride, false);
+  assert.equal(lockedAboveFloor.priceUsd, 0.85);
+
+  // Exclusiones: tarjetas, pases, level_up, gift cards/PINs y otros juegos tienen piso 0
+  assert.equal(sync.freeFireOfferProfitFloor(ffPlan, { kind: 'package', amount: 100, isFreeFireCard: true, isPin: false }), 0);
+  assert.equal(sync.freeFireOfferProfitFloor(ffPlan, { kind: 'special', amount: 100, isFreeFireCard: false, isPin: false }), 0);
+  assert.equal(sync.freeFireOfferProfitFloor(ffPlan, { kind: 'level_up', amount: 100, isFreeFireCard: false, isPin: false }), 0);
+  assert.equal(sync.freeFireOfferProfitFloor(ffPlan, { kind: 'package', amount: 100, isFreeFireCard: false, isPin: true }), 0);
+  assert.equal(sync.freeFireOfferProfitFloor({ isFreeFireLatam: false, family: 'topup' }, { kind: 'package', amount: 100, isFreeFireCard: false, isPin: false }), 0);
+  assert.equal(sync.freeFireOfferProfitFloor({ isFreeFireLatam: true, family: 'gift_card' }, { kind: 'package', amount: 100, isFreeFireCard: false, isPin: false }), 0);
+
+  // Producto no-Free Fire sin piso mantiene applyMargin ($0.6318 con 30% -> $0.82)
+  const nonFfRes = sync.resolveCentralOnePrice({
+    costUsd: 0.6318,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    profitFloorUsd: sync.freeFireProductProfitFloor({
+      gameId: 'co-topup-blood-strike-global',
+      kind: 'package',
+      amount: 100,
+      name: '100 + 5 Gold',
+    }),
+  });
+  assert.equal(nonFfRes.priceUsd, 0.82);
+});
+
+test('planCentralOneCombos: cada combo Free Fire usa su piso sumado (LATAM y freefire-id), respeta/corrige priceLocked y no toca Blood Strike', () => {
+  // Costos elegidos para que costo * 1.30 < costo + piso en todos los combos
+  const lowCostOffers = [
+    { productId: 'ff-100', label: '110 Diamantes', kind: 'package', amount: 100, costUsd: 0.6318, stock: null, providerAvailable: true },
+    { productId: 'ff-310', label: '341 Diamantes', kind: 'package', amount: 310, costUsd: 1.85, stock: null, providerAvailable: true },
+    { productId: 'ff-520', label: '572 Diamantes', kind: 'package', amount: 520, costUsd: 3.10, stock: null, providerAvailable: true },
+    { productId: 'ff-1060', label: '1166 Diamantes', kind: 'package', amount: 1060, costUsd: 6.20, stock: null, providerAvailable: true },
+    { productId: 'ff-2180', label: '2398 Diamantes', kind: 'package', amount: 2180, costUsd: 12.50, stock: null, providerAvailable: true },
+    { productId: 'ff-5600', label: '6160 Diamantes', kind: 'package', amount: 5600, costUsd: 31.00, stock: null, providerAvailable: true },
+  ];
+
+  const expectedFloors = {
+    'c-451': 0.80,  // 310 (0.60) + 100 (0.20)
+    'c-682': 1.20,  // 520 (1.00) + 100 (0.20)
+    'c-913': 1.60,  // 520 (1.00) + 310 (0.60)
+    'c-1738': 3.00, // 1060 (2.00) + 520 (1.00)
+    'c-3542': 6.00, // 2180 (4.00) + 1060 (2.00)
+    'c-8536': 14.00, // 5600 (10.00) + 2180 (4.00)
+  };
+
+  for (const targetGameId of ['co-topup-free-fire-latam', 'freefire-id']) {
+    const result = sync.planCentralOneCombos({
+      plan: { id: 'co-topup-free-fire-latam', familyName: 'Free Fire', targetFields: ['player_id'], offers: lowCostOffers },
+      specs: sync.FREE_FIRE_LATAM_COMBO_SPECS,
+      targetGameId,
+      existingProducts: new Map(),
+      pricing: { marginPercent: 30, roundToUsd: 0.01 },
+      timestamp: 'ts',
+    });
+    assert.equal(result.combos.length, 6);
+
+    for (const [suffix, floor] of Object.entries(expectedFloors)) {
+      const id = targetGameId === 'freefire-id' ? `freefire-id--${suffix}` : `${targetGameId}--${suffix}`;
+      const combo = result.combos.find((c) => c.id === id);
+      assert.ok(combo, `falta combo ${id}`);
+      const expectedPrice = money.roundUpTo(combo.costUsd + floor, 0.01);
+      assert.equal(combo.priceUsd, expectedPrice, `${id}: precio con piso ${floor}`);
+      assert.ok(money.round(combo.priceUsd - combo.costUsd, 4) >= floor, `${id}: ganancia >= ${floor}`);
+    }
+  }
+
+  // priceLocked en combo: por debajo de costUsd + floor (pero > costUsd) se recalcula; >= costUsd + floor se respeta
+  const existingCombos = new Map([
+    ['co-topup-free-fire-latam--c-451', { id: 'co-topup-free-fire-latam--c-451', priceUsd: 3.10, priceLocked: true }], // cost=2.4818, min=3.2818
+    ['co-topup-free-fire-latam--c-682', { id: 'co-topup-free-fire-latam--c-682', priceUsd: 5.50, priceLocked: true }], // cost=3.7318, min=4.9318
+  ]);
+  const lockedResult = sync.planCentralOneCombos({
+    plan: { id: 'co-topup-free-fire-latam', familyName: 'Free Fire', targetFields: ['player_id'], offers: lowCostOffers },
+    specs: sync.FREE_FIRE_LATAM_COMBO_SPECS.slice(0, 2),
+    targetGameId: 'co-topup-free-fire-latam',
+    existingProducts: existingCombos,
+    pricing: { marginPercent: 30, roundToUsd: 0.01 },
+    timestamp: 'ts',
+  });
+  assert.equal(lockedResult.combos.find((c) => c.id === 'co-topup-free-fire-latam--c-451').priceUsd, 3.29);
+  assert.equal(lockedResult.combos.find((c) => c.id === 'co-topup-free-fire-latam--c-682').priceUsd, 5.50);
+
+  // Blood Strike NO recibe piso (usa applyMargin estándar)
+  const bsPlan = {
+    id: 'co-topup-blood-strike-global',
+    familyName: 'Blood Strike',
+    targetFields: ['game_user_id'],
+    offers: [
+      { productId: 'ebc6b685-9d50-4d42-9aae-48e8c089a793', label: '105 Gold', kind: 'package', amount: 105, costUsd: 0.6318, stock: null, providerAvailable: true },
+      { productId: '35213545-bd4b-4e0b-8e76-b6ef476df25a', label: '320 Gold', kind: 'package', amount: 320, costUsd: 1.85, stock: null, providerAvailable: true },
+    ],
+  };
+  const bsCombos = sync.planCentralOneCombos({
+    plan: bsPlan,
+    specs: [sync.BLOOD_STRIKE_COMBO_SPECS[0]],
+    targetGameId: 'co-topup-blood-strike-global',
+    existingProducts: new Map(),
+    pricing: { marginPercent: 30, roundToUsd: 0.01 },
+    timestamp: 'ts',
+  });
+  assert.equal(bsCombos.combos[0].costUsd, 2.4818);
+  assert.equal(bsCombos.combos[0].priceUsd, money.applyMargin(2.4818, 30, 0.01));
+});
+
+test('Free Fire tarjetas y Pase Booyah: pisos $0.50 / $2.00 / $0.60 y preservación de priceLocked en Booyah', () => {
+  const ffPlan = { isFreeFireLatam: true, family: 'topup' };
+
+  // 1. Tarjeta Semanal: piso $0.50 y enforceFloorOnLocked: true
+  const weeklyPolicy = sync.freeFireOfferProfitPolicy(ffPlan, {
+    kind: 'special',
+    amount: 0,
+    isFreeFireCard: true,
+    isPin: false,
+    label: 'Tarjeta Semanal',
+  });
+  assert.deepEqual(weeklyPolicy, { profitFloorUsd: 0.50, enforceFloorOnLocked: true });
+  assert.deepEqual(
+    sync.freeFireOfferProfitPolicy(ffPlan, {
+      kind: 'special',
+      amount: 0,
+      isFreeFireCard: true,
+      isPin: false,
+      label: 'Weekly Membership',
+    }),
+    { profitFloorUsd: 0.50, enforceFloorOnLocked: true }
+  );
+  // Costo 1.50 @ 30% = 1.95 < 2.00 -> 2.00; locked 1.90 -> 2.00; locked 2.20 -> 2.20
+  assert.equal(
+    sync.resolveCentralOnePrice({ costUsd: 1.50, marginPercent: 30, roundToUsd: 0.01, ...weeklyPolicy }).priceUsd,
+    2.00
+  );
+  const weeklyLockedLow = sync.resolveCentralOnePrice({
+    costUsd: 1.50,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    ...weeklyPolicy,
+    currentPriceUsd: 1.90,
+    priceLocked: true,
+  });
+  assert.equal(weeklyLockedLow.floorOverride, true);
+  assert.equal(weeklyLockedLow.priceUsd, 2.00);
+  const weeklyLockedOk = sync.resolveCentralOnePrice({
+    costUsd: 1.50,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    ...weeklyPolicy,
+    currentPriceUsd: 2.20,
+    priceLocked: true,
+  });
+  assert.equal(weeklyLockedOk.floorOverride, false);
+  assert.equal(weeklyLockedOk.priceUsd, 2.20);
+
+  // 2. Tarjeta Mensual: piso $2.00 y enforceFloorOnLocked: true
+  const monthlyPolicy = sync.freeFireOfferProfitPolicy(ffPlan, {
+    kind: 'special',
+    amount: 0,
+    isFreeFireCard: true,
+    isPin: false,
+    label: 'Tarjeta Mensual',
+  });
+  assert.deepEqual(monthlyPolicy, { profitFloorUsd: 2.00, enforceFloorOnLocked: true });
+  assert.deepEqual(
+    sync.freeFireOfferProfitPolicy(ffPlan, {
+      kind: 'special',
+      amount: 0,
+      isFreeFireCard: true,
+      isPin: false,
+      label: 'Monthly Membership',
+    }),
+    { profitFloorUsd: 2.00, enforceFloorOnLocked: true }
+  );
+  // Costo 6.00 @ 30% = 7.80 < 8.00 -> 8.00; locked 7.50 -> 8.00; locked 8.50 -> 8.50
+  assert.equal(
+    sync.resolveCentralOnePrice({ costUsd: 6.00, marginPercent: 30, roundToUsd: 0.01, ...monthlyPolicy }).priceUsd,
+    8.00
+  );
+  const monthlyLockedLow = sync.resolveCentralOnePrice({
+    costUsd: 6.00,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    ...monthlyPolicy,
+    currentPriceUsd: 7.50,
+    priceLocked: true,
+  });
+  assert.equal(monthlyLockedLow.floorOverride, true);
+  assert.equal(monthlyLockedLow.priceUsd, 8.00);
+  const monthlyLockedOk = sync.resolveCentralOnePrice({
+    costUsd: 6.00,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    ...monthlyPolicy,
+    currentPriceUsd: 8.50,
+    priceLocked: true,
+  });
+  assert.equal(monthlyLockedOk.floorOverride, false);
+  assert.equal(monthlyLockedOk.priceUsd, 8.50);
+
+  // 3. Pases Booyah: piso $0.60 y enforceFloorOnLocked: false (respeta precios congelados manualmente salvo pérdida)
+  for (const booyahLabel of ['Pase Booyah', 'Pase Booyah Premium', 'Booyah Pass', 'Tarjeta Pase Booyah']) {
+    const booyahPolicy = sync.freeFireOfferProfitPolicy(ffPlan, {
+      kind: 'special',
+      amount: 0,
+      isFreeFireCard: false,
+      isPin: false,
+      label: booyahLabel,
+    });
+    assert.deepEqual(booyahPolicy, { profitFloorUsd: 0.60, enforceFloorOnLocked: false }, booyahLabel);
+  }
+  const booyahPolicy = { profitFloorUsd: 0.60, enforceFloorOnLocked: false };
+  // Sin priceLocked: costo 0.8269 @ 30% = 1.08 < 1.4269 -> 1.43; costo 1.6645 @ 30% = 2.16 < 2.2645 -> 2.27
+  assert.equal(
+    sync.resolveCentralOnePrice({ costUsd: 0.8269, marginPercent: 30, roundToUsd: 0.01, ...booyahPolicy }).priceUsd,
+    1.43
+  );
+  assert.equal(
+    sync.resolveCentralOnePrice({ costUsd: 1.6645, marginPercent: 30, roundToUsd: 0.01, ...booyahPolicy }).priceUsd,
+    2.27
+  );
+  // Con priceLocked: true a $1.20 (>= costUsd 0.8269 pero < 1.4269) -> SE RESPETA en $1.20
+  const booyahLockedManual = sync.resolveCentralOnePrice({
+    costUsd: 0.8269,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    ...booyahPolicy,
+    currentPriceUsd: 1.20,
+    priceLocked: true,
+  });
+  assert.equal(booyahLockedManual.floorOverride, false);
+  assert.equal(booyahLockedManual.priceUsd, 1.20);
+  // Con priceLocked: true a pérdida ($0.80 < costUsd 0.8269) -> recalcula a $1.43
+  const booyahLockedLoss = sync.resolveCentralOnePrice({
+    costUsd: 0.8269,
+    marginPercent: 30,
+    roundToUsd: 0.01,
+    ...booyahPolicy,
+    currentPriceUsd: 0.80,
+    priceLocked: true,
+  });
+  assert.equal(booyahLockedLoss.floorOverride, true);
+  assert.equal(booyahLockedLoss.priceUsd, 1.43);
+
+  // 4. Exclusiones: Tarjeta Semanal Lite, Básica Semanal, Level Up, Evo Access, PINs y otros juegos -> piso 0
+  for (const excludedLabel of ['Tarjeta Semanal Lite', 'Básica Semanal', 'Evo Access 3 Días']) {
+    assert.equal(
+      sync.freeFireOfferProfitPolicy(ffPlan, {
+        kind: 'special',
+        amount: 0,
+        isFreeFireCard: true,
+        isPin: false,
+        label: excludedLabel,
+      }).profitFloorUsd,
+      0,
+      excludedLabel
+    );
+  }
+  assert.equal(
+    sync.freeFireOfferProfitPolicy(ffPlan, { kind: 'level_up', amount: 6, isFreeFireCard: false, isPin: false, label: 'Level Up 6' }).profitFloorUsd,
+    0
+  );
+  assert.equal(
+    sync.freeFireOfferProfitPolicy(ffPlan, { kind: 'special', amount: 0, isFreeFireCard: false, isPin: true, label: 'Tarjeta Semanal PIN' }).profitFloorUsd,
+    0
+  );
+  assert.equal(
+    sync.freeFireProductProfitPolicy({ gameId: 'co-topup-blood-strike-global', kind: 'special', name: 'Weekly Pass' }).profitFloorUsd,
+    0
+  );
+  assert.equal(
+    sync.freeFireProductProfitPolicy({ gameId: 'co-topup-blood-strike-global', kind: 'special', name: 'Booyah' }).profitFloorUsd,
+    0
+  );
 });

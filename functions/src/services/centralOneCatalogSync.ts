@@ -36,7 +36,7 @@ import {
   products,
   providerSync,
 } from '../config/firebase';
-import { applyMargin, round } from '../lib/money';
+import { applyMargin, applyMarginWithProfitFloor, round } from '../lib/money';
 import { slugify } from '../lib/ids';
 import { log } from '../lib/logger';
 import { resolveRegionInfo, extractPackageRegionNotice, calculateGameSortOrder } from '../lib/regions';
@@ -1390,7 +1390,12 @@ export function planFreeFireExtras(input: FreeFireExtrasInput): FreeFireExtrasPl
           amount: offer.amount,
           bonus: 0,
           costUsd: offer.costUsd,
-          priceUsd: applyMargin(offer.costUsd, input.pricing.marginPercent, input.pricing.roundToUsd),
+          priceUsd: applyMarginWithProfitFloor(
+            offer.costUsd,
+            input.pricing.marginPercent,
+            freeFireOfferProfitPolicy({ isFreeFireLatam: true, family: 'topup' }, offer).profitFloorUsd,
+            input.pricing.roundToUsd
+          ),
           compareAtUsd: null,
           calls,
           imageUrl: extraImage(offer.label, offer.kind),
@@ -1596,6 +1601,182 @@ export const BLOOD_STRIKE_COMBO_SPECS: CentralOneComboSpec[] = [
   },
 ];
 
+/**
+ * Piso mínimo de ganancia en USD por paquete base de diamantes de Free Fire
+ * (indexado por `amount` base sin bono).
+ */
+export const FREE_FIRE_DIAMOND_PROFIT_FLOOR_USD: Readonly<Record<number, number>> = {
+  100: 0.20,
+  310: 0.60,
+  520: 1.00,
+  1060: 2.00,
+  2180: 4.00,
+  5600: 10.00,
+};
+
+/**
+ * Central One a veces etiqueta la oferta con el total incluyendo el +10% de
+ * bono en vez del `amount` base. Mapeo equivalente al de `findBaseOfferForRequirement`.
+ */
+export const FREE_FIRE_TOTAL_TO_BASE_AMOUNT: Readonly<Record<number, number>> = {
+  110: 100,
+  341: 310,
+  572: 520,
+  1166: 1060,
+  2398: 2180,
+  6160: 5600,
+};
+
+/** Devuelve el piso de ganancia en USD para un paquete base de diamantes Free Fire, o `0`. */
+export function freeFireBaseProfitFloor(amount: number | null | undefined): number {
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) return 0;
+  const base = FREE_FIRE_TOTAL_TO_BASE_AMOUNT[amount] ?? amount;
+  return FREE_FIRE_DIAMOND_PROFIT_FLOOR_USD[base] ?? 0;
+}
+
+/** Piso de ganancia en USD para un combo de Free Fire = suma de pisos de `baseRequirements`. */
+export function freeFireComboProfitFloor(baseRequirements: readonly number[]): number {
+  let sum = 0;
+  for (const req of baseRequirements) {
+    sum += freeFireBaseProfitFloor(req);
+  }
+  return round(sum, 2);
+}
+
+/** `true` si el `gameId` corresponde a Free Fire LATAM de Central One o clones `free-fire`/`freefire-id`. */
+export function isFreeFireDiamondFloorGameId(gameId: string | null | undefined): boolean {
+  if (typeof gameId !== 'string' || !gameId) return false;
+  if (gameId === INEFABLE_FREE_FIRE_ID || gameId === INEFABLE_FREE_FIRE_ID_NEW) return true;
+  const id = gameId.toLowerCase();
+  return id.startsWith('co-topup-') && /free[-_\s]*fire/.test(id) && id.endsWith('-latam');
+}
+
+/** Política de piso de ganancia para productos especiales de Free Fire LATAM. */
+export interface FreeFireProfitPolicy {
+  profitFloorUsd: number;
+  enforceFloorOnLocked: boolean;
+}
+
+/**
+ * Pisos mínimos de ganancia en USD para tarjetas y pases de Free Fire LATAM.
+ * En los pases Booyah se respeta el precio fijado manual (`priceLocked`) salvo pérdida.
+ */
+export const FREE_FIRE_SPECIAL_PROFIT_FLOOR_USD = {
+  weekly: 0.50,
+  monthly: 2.00,
+  booyah: 0.60,
+} as const;
+
+/** Devuelve el piso y la política de bloqueo para tarjetas y pases de Free Fire LATAM. */
+export function freeFireSpecialProfitPolicy(label: string | null | undefined): FreeFireProfitPolicy {
+  const text = typeof label === 'string' ? label.trim() : '';
+  if (!text) return { profitFloorUsd: 0, enforceFloorOnLocked: true };
+  if (/\bbooyah\b/i.test(text)) {
+    return { profitFloorUsd: FREE_FIRE_SPECIAL_PROFIT_FLOOR_USD.booyah, enforceFloorOnLocked: false };
+  }
+  if (/\b(monthly|mensual)\b/i.test(text)) {
+    return { profitFloorUsd: FREE_FIRE_SPECIAL_PROFIT_FLOOR_USD.monthly, enforceFloorOnLocked: true };
+  }
+  if (/\b(weekly|semanal)\b/i.test(text) && !/\b(lite|b[aá]sic[ao])\b/i.test(text)) {
+    return { profitFloorUsd: FREE_FIRE_SPECIAL_PROFIT_FLOOR_USD.weekly, enforceFloorOnLocked: true };
+  }
+  return { profitFloorUsd: 0, enforceFloorOnLocked: true };
+}
+
+/** Política de piso de ganancia para una oferta mapeada de Central One. */
+export function freeFireOfferProfitPolicy(
+  plan: Pick<CentralOneGamePlan, 'isFreeFireLatam' | 'family'>,
+  offer: Pick<CentralOneOffer, 'kind' | 'amount' | 'isFreeFireCard' | 'isPin'> & { label?: string }
+): FreeFireProfitPolicy {
+  if (!plan.isFreeFireLatam || plan.family !== 'topup' || offer.isPin || offer.kind === 'level_up') {
+    return { profitFloorUsd: 0, enforceFloorOnLocked: true };
+  }
+  if (offer.kind === 'special' || offer.isFreeFireCard) {
+    return freeFireSpecialProfitPolicy(offer.label);
+  }
+  if (offer.kind === 'package') {
+    return { profitFloorUsd: freeFireBaseProfitFloor(offer.amount), enforceFloorOnLocked: true };
+  }
+  return { profitFloorUsd: 0, enforceFloorOnLocked: true };
+}
+
+/** Piso de ganancia en USD para una oferta mapeada de Central One (0 si no aplica). */
+export function freeFireOfferProfitFloor(
+  plan: Pick<CentralOneGamePlan, 'isFreeFireLatam' | 'family'>,
+  offer: Pick<CentralOneOffer, 'kind' | 'amount' | 'isFreeFireCard' | 'isPin'> & { label?: string }
+): number {
+  return freeFireOfferProfitPolicy(plan, offer).profitFloorUsd;
+}
+
+/**
+ * Política de piso de ganancia para un documento de producto almacenado (usado por
+ * el webhook de Central One). Sólo aplica a Free Fire LATAM / `free-fire` / `freefire-id`.
+ */
+export function freeFireProductProfitPolicy(product: {
+  gameId?: unknown;
+  kind?: unknown;
+  amount?: unknown;
+  name?: unknown;
+}): FreeFireProfitPolicy {
+  const gameId = typeof product.gameId === 'string' ? product.gameId : '';
+  if (!isFreeFireDiamondFloorGameId(gameId)) return { profitFloorUsd: 0, enforceFloorOnLocked: true };
+  const kind = product.kind;
+  if (kind === 'level_up') return { profitFloorUsd: 0, enforceFloorOnLocked: true };
+  const name = typeof product.name === 'string' ? product.name : '';
+  if (kind === 'special' || (name && (isFreeFireCard('Free Fire', name) || /\bbooyah\b/i.test(name)))) {
+    return freeFireSpecialProfitPolicy(name);
+  }
+  const amount = typeof product.amount === 'number' ? product.amount : Number(product.amount);
+  if (kind === 'package') {
+    return { profitFloorUsd: freeFireBaseProfitFloor(amount), enforceFloorOnLocked: true };
+  }
+  if (kind === 'combo' && Number.isFinite(amount)) {
+    const spec = FREE_FIRE_LATAM_COMBO_SPECS.find((s) => s.amount === amount);
+    return { profitFloorUsd: spec ? freeFireComboProfitFloor(spec.baseRequirements) : 0, enforceFloorOnLocked: true };
+  }
+  return { profitFloorUsd: 0, enforceFloorOnLocked: true };
+}
+
+/**
+ * Piso de ganancia en USD para un documento de producto almacenado (usado por
+ * el webhook de Central One).
+ */
+export function freeFireProductProfitFloor(product: {
+  gameId?: unknown;
+  kind?: unknown;
+  amount?: unknown;
+  name?: unknown;
+}): number {
+  return freeFireProductProfitPolicy(product).profitFloorUsd;
+}
+
+/**
+ * Resuelve el precio final respetando `priceLocked` salvo que el precio fijado
+ * quede por debajo de `costUsd + profitFloorUsd` (o sólo por debajo de `costUsd`
+ * cuando `enforceFloorOnLocked === false`, evitando falsos positivos de coma flotante).
+ */
+export function resolveCentralOnePrice(input: {
+  costUsd: number;
+  marginPercent: number;
+  roundToUsd: number;
+  profitFloorUsd: number;
+  enforceFloorOnLocked?: boolean;
+  currentPriceUsd?: number;
+  priceLocked?: boolean;
+}): { priceUsd: number; freshPrice: number; floorOverride: boolean } {
+  const floor = Number.isFinite(input.profitFloorUsd) && input.profitFloorUsd > 0 ? input.profitFloorUsd : 0;
+  const freshPrice = applyMarginWithProfitFloor(input.costUsd, input.marginPercent, floor, input.roundToUsd);
+  if (input.priceLocked === true && typeof input.currentPriceUsd === 'number') {
+    const lockedFloor = input.enforceFloorOnLocked === false ? 0 : floor;
+    const minAllowedPrice = round(input.costUsd + lockedFloor, 4);
+    if (round(input.currentPriceUsd, 4) < minAllowedPrice) {
+      return { priceUsd: freshPrice, freshPrice, floorOverride: true };
+    }
+    return { priceUsd: input.currentPriceUsd, freshPrice, floorOverride: false };
+  }
+  return { priceUsd: freshPrice, freshPrice, floorOverride: false };
+}
+
 export const FREE_FIRE_LATAM_COMBO_SPECS: CentralOneComboSpec[] = [
   {
     idSuffix: 'c-451',
@@ -1737,6 +1918,12 @@ export function planCentralOneCombos(input: CentralOneComboPlanInput): {
   const combos: DocData[] = [];
   const seenIds: string[] = [];
   const isBloodStrike = /blood\s*strike/i.test(input.plan.familyName);
+  const isFreeFire =
+    !isBloodStrike &&
+    (FREE_FIRE_NAME.test(input.plan.familyName) ||
+      input.targetGameId === INEFABLE_FREE_FIRE_ID ||
+      input.targetGameId === INEFABLE_FREE_FIRE_ID_NEW ||
+      input.targetGameId.includes('free-fire'));
   const targetFields = isBloodStrike
     ? (input.plan.targetFields.length > 0 ? input.plan.targetFields : ['game_user_id'])
     : (input.plan.targetFields.length > 0 ? input.plan.targetFields : ['player_id']);
@@ -1796,17 +1983,15 @@ export function planCentralOneCombos(input: CentralOneComboPlanInput): {
       (offer) => offer.providerAvailable && (offer.stock === null || offer.stock > 0)
     );
 
-    const freshPrice = applyMargin(costUsd, input.pricing.marginPercent, input.pricing.roundToUsd);
-    let priceUsd = freshPrice;
-    if (current && current.priceLocked === true && typeof current.priceUsd === 'number') {
-      const currentPrice = current.priceUsd;
-      // Respeta precios fijados por el admin, salvo si el costo supera al precio
-      if (costUsd > currentPrice) {
-        priceUsd = freshPrice;
-      } else {
-        priceUsd = currentPrice;
-      }
-    }
+    const profitFloorUsd = isFreeFire ? freeFireComboProfitFloor(spec.baseRequirements) : 0;
+    const { priceUsd } = resolveCentralOnePrice({
+      costUsd,
+      marginPercent: input.pricing.marginPercent,
+      roundToUsd: input.pricing.roundToUsd,
+      profitFloorUsd,
+      currentPriceUsd: typeof current?.priceUsd === 'number' ? current.priceUsd : undefined,
+      priceLocked: current?.priceLocked === true,
+    });
 
     const adminDisabled = current?.adminDisabled === true;
     const active = inStock && !adminDisabled;
@@ -2095,8 +2280,8 @@ function emptySummary(startedAt: Date): CentralOneSyncSummary {
   };
 }
 
-function priceFor(ctx: SyncContext, costUsd: number): number {
-  return applyMargin(costUsd, ctx.marginPercent, ctx.roundToUsd);
+function priceFor(ctx: SyncContext, costUsd: number, profitFloorUsd = 0): number {
+  return applyMarginWithProfitFloor(costUsd, ctx.marginPercent, profitFloorUsd, ctx.roundToUsd);
 }
 
 // ---------------------------------------------------------------------------
@@ -2188,7 +2373,8 @@ function upsertGame(
     const calls: DispatchCall[] = [
       { packageId: offer.productId, quantity: 1, provider: 'centralone', targetFields: [...offer.targetFields] },
     ];
-    const freshPrice = priceFor(ctx, offer.costUsd);
+    const { profitFloorUsd, enforceFloorOnLocked } = freeFireOfferProfitPolicy(plan, offer);
+    const freshPrice = priceFor(ctx, offer.costUsd, profitFloorUsd);
     const productNotice = extractPackageRegionNotice(offer.label) || (regionInfo.isRegionRestricted ? regionInfo.regionWarning : undefined);
 
     if (!current) {
@@ -2253,19 +2439,28 @@ function upsertGame(
 
     const adminDisabled = current.adminDisabled === true;
     const currentPrice = typeof current.priceUsd === 'number' ? current.priceUsd : 0;
-    let priceUsd = freshPrice;
-    if (current.priceLocked === true) {
-      // Precio fijado por el admin: se respeta salvo que ahora se venda a pérdida.
-      priceUsd = currentPrice;
-      if (offer.costUsd > currentPrice) {
-        priceUsd = freshPrice;
-        log.warn('Precio fijado por el admin por debajo del costo de Central One; se recalcula', {
+    const { priceUsd, floorOverride } = resolveCentralOnePrice({
+      costUsd: offer.costUsd,
+      marginPercent: ctx.marginPercent,
+      roundToUsd: ctx.roundToUsd,
+      profitFloorUsd,
+      enforceFloorOnLocked,
+      currentPriceUsd: currentPrice,
+      priceLocked: current.priceLocked === true,
+    });
+    if (floorOverride) {
+      log.warn(
+        enforceFloorOnLocked && profitFloorUsd > 0 && currentPrice >= offer.costUsd
+          ? 'Precio fijado por el admin por debajo de costo + piso mínimo; se recalcula'
+          : 'Precio fijado por el admin por debajo del costo de Central One; se recalcula',
+        {
           productId: offer.docId,
           costUsd: offer.costUsd,
+          profitFloorUsd,
           lockedPriceUsd: currentPrice,
-          newPriceUsd: freshPrice,
-        });
-      }
+          newPriceUsd: priceUsd,
+        }
+      );
     }
     const pausedByDispatch = centralOne.isProductDispatchPaused(current as Partial<Product>);
     const active = offer.providerAvailable && !adminDisabled && !pausedByDispatch;

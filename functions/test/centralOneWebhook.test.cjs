@@ -123,8 +123,9 @@ mockModule('../lib/services/adminAlerts.js', {
     }
   },
 });
+let mockPricing = { defaultMarginPercent: 20, roundToUsd: 0.05, roundToBs: 0.01 };
 mockModule('../lib/services/settings.js', {
-  getConfig: async () => ({ pricing: { defaultMarginPercent: 20, roundToUsd: 0.05, roundToBs: 0.01 } }),
+  getConfig: async () => ({ pricing: mockPricing }),
 });
 mockModule('../lib/services/telegramSupportBot.js', { handleTelegramSupportWebhook: async () => {} });
 
@@ -152,6 +153,7 @@ function reset() {
   resolverCalls.length = 0;
   alerts.length = 0;
   lowBalanceAlerted = false;
+  mockPricing = { defaultMarginPercent: 20, roundToUsd: 0.05, roundToBs: 0.01 };
   resolverImpl = async () => ({ matched: true, orderId: 'order-1', result: 'resuelta' });
 }
 
@@ -545,4 +547,136 @@ test('freshProductChange / extraChangeProblem', () => {
     webhooks.extraChangeProblem({ ...extra, calls: [{ packageId: 'a' }, { packageId: 'b' }] }, { reseller_price: '9' }),
     null
   );
+});
+
+test('productPatchFromChange: respeta priceLocked salvo que quede por debajo de costo + piso', () => {
+  const priceWithFloor = (cost) => Math.max(Math.round(cost * 1.3 * 100) / 100, Math.ceil((cost + 0.2) * 100) / 100);
+  // Precio fijado $0.83 < $0.6318 + $0.20 ($0.8318) -> recalcula a $0.84 con lossGuard
+  assert.deepEqual(
+    webhooks.productPatchFromChange(
+      { costUsd: 0.70, priceUsd: 0.83, stock: null, active: true, priceLocked: true },
+      { reseller_price: '0.6318' },
+      priceWithFloor,
+      0.20
+    ),
+    { patch: { costUsd: 0.6318, priceUsd: 0.84 }, lossGuard: true }
+  );
+  // Precio fijado $0.85 >= $0.6318 + $0.20 -> se respeta
+  assert.deepEqual(
+    webhooks.productPatchFromChange(
+      { costUsd: 0.70, priceUsd: 0.85, stock: null, active: true, priceLocked: true },
+      { reseller_price: '0.6318' },
+      priceWithFloor,
+      0.20
+    ),
+    { patch: { costUsd: 0.6318 }, lossGuard: false }
+  );
+});
+
+test('webhook Central One: product.price_changed aplica piso de ganancia a diamantes, tarjetas y Booyah (preservando Booyah priceLocked)', async () => {
+  reset();
+  mockPricing = { defaultMarginPercent: 30, roundToUsd: 0.01, roundToBs: 0.01 };
+  const synced = Timestamp.fromDate(new Date('2026-11-01T00:00:00Z'));
+
+  store.set('games/co-topup-free-fire-latam', { name: 'Free Fire', productCount: 10, minPriceUsd: 0.82 });
+  store.set('games/co-topup-blood-strike-global', { name: 'Blood Strike', productCount: 1, minPriceUsd: 0.82 });
+
+  // 1. Free Fire 100 diamantes (sin bloqueo): baja a $0.6318 -> $0.84 (ganancia >= $0.20)
+  store.set('products/co-topup-free-fire-latam--ff100', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'ff100',
+    providerSyncedAt: synced, kind: 'package', amount: 100, name: '110 Diamantes',
+    costUsd: 0.70, priceUsd: 0.91, stock: null, active: true,
+  });
+  // 2. Free Fire 100 diamantes con priceLocked debajo del piso ($0.83 < $0.8318) -> recalcula a $0.84
+  store.set('products/co-topup-free-fire-latam--ff100-locked-low', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'ff100-low',
+    providerSyncedAt: synced, kind: 'package', amount: 100, name: '110 Diamantes',
+    costUsd: 0.70, priceUsd: 0.83, stock: null, active: true, priceLocked: true,
+  });
+  // 3. Free Fire 100 diamantes con priceLocked sobre el piso ($0.90 >= $0.8318) -> se respeta
+  store.set('products/co-topup-free-fire-latam--ff100-locked-ok', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'ff100-ok',
+    providerSyncedAt: synced, kind: 'package', amount: 100, name: '110 Diamantes',
+    costUsd: 0.70, priceUsd: 0.90, stock: null, active: true, priceLocked: true,
+  });
+  // 4. Tarjeta Semanal Free Fire: piso $0.50 ($1.50 * 1.30 = $1.95 < $2.00 -> $2.00)
+  store.set('products/co-topup-free-fire-latam--ffcard-week', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'ffcard-week',
+    providerSyncedAt: synced, kind: 'special', amount: 0, name: 'Tarjeta Semanal',
+    costUsd: 1.60, priceUsd: 2.08, stock: null, active: true,
+  });
+  // 5. Tarjeta Semanal Free Fire con priceLocked debajo del piso ($1.90 < $2.00) -> recalcula a $2.00
+  store.set('products/co-topup-free-fire-latam--ffcard-week-locked', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'ffcard-week-locked',
+    providerSyncedAt: synced, kind: 'special', amount: 0, name: 'Tarjeta Semanal',
+    costUsd: 1.60, priceUsd: 1.90, stock: null, active: true, priceLocked: true,
+  });
+  // 6. Tarjeta Mensual Free Fire: piso $2.00 ($6.00 * 1.30 = $7.80 < $8.00 -> $8.00)
+  store.set('products/co-topup-free-fire-latam--ffcard-month', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'ffcard-month',
+    providerSyncedAt: synced, kind: 'special', amount: 0, name: 'Tarjeta Mensual',
+    costUsd: 6.50, priceUsd: 8.50, stock: null, active: true,
+  });
+  // 7. Pase Booyah desbloqueado: piso $0.60 ($0.8269 * 1.30 = $1.08 < $1.4269 -> $1.43)
+  store.set('products/co-topup-free-fire-latam--ffbooyah', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'ffbooyah',
+    providerSyncedAt: synced, kind: 'special', amount: 0, name: 'Pase Booyah',
+    costUsd: 0.90, priceUsd: 1.50, stock: null, active: true,
+  });
+  // 8. Pase Booyah Premium con priceLocked manual ($1.20 >= $0.8269): se deja intacto
+  store.set('products/co-topup-free-fire-latam--ffbooyah-locked', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'ffbooyah-locked',
+    providerSyncedAt: synced, kind: 'special', amount: 0, name: 'Pase Booyah Premium',
+    costUsd: 0.90, priceUsd: 1.20, stock: null, active: true, priceLocked: true,
+  });
+  // 9. Tarjeta Semanal Lite y Level Up 6: sin piso -> $0.6318 * 1.30 = $0.82
+  store.set('products/co-topup-free-fire-latam--ffcard-lite', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'ffcard-lite',
+    providerSyncedAt: synced, kind: 'special', amount: 0, name: 'Tarjeta Semanal Lite',
+    costUsd: 0.70, priceUsd: 0.91, stock: null, active: true,
+  });
+  store.set('products/co-topup-free-fire-latam--fflvl6', {
+    gameId: 'co-topup-free-fire-latam', provider: 'centralone', providerOfferId: 'fflvl6',
+    providerSyncedAt: synced, kind: 'level_up', amount: 6, name: 'Nivel 6',
+    costUsd: 0.70, priceUsd: 0.91, stock: null, active: true,
+  });
+  // 10. Blood Strike 100 Gold: otro juego, sin piso -> $0.6318 * 1.30 = $0.82
+  store.set('products/co-topup-blood-strike-global--bs100', {
+    gameId: 'co-topup-blood-strike-global', provider: 'centralone', providerOfferId: 'bs100',
+    providerSyncedAt: synced, kind: 'package', amount: 100, name: '100 + 5 Gold',
+    costUsd: 0.70, priceUsd: 0.91, stock: null, active: true,
+  });
+
+  const result = await webhooks.processCentralOneWebhook(
+    signed({
+      event: 'product.price_changed',
+      event_id: 'evt_ff_floor_1',
+      occurred_at: '2026-11-02T10:00:00Z',
+      products: [
+        { product_id: 'ff100', reseller_price: '0.6318' },
+        { product_id: 'ff100-low', reseller_price: '0.6318' },
+        { product_id: 'ff100-ok', reseller_price: '0.6318' },
+        { product_id: 'ffcard-week', reseller_price: '1.5000' },
+        { product_id: 'ffcard-week-locked', reseller_price: '1.5000' },
+        { product_id: 'ffcard-month', reseller_price: '6.0000' },
+        { product_id: 'ffbooyah', reseller_price: '0.8269' },
+        { product_id: 'ffbooyah-locked', reseller_price: '0.8269' },
+        { product_id: 'ffcard-lite', reseller_price: '0.6318' },
+        { product_id: 'fflvl6', reseller_price: '0.6318' },
+        { product_id: 'bs100', reseller_price: '0.6318' },
+      ],
+    })
+  );
+  assert.equal(result.status, 200);
+  assert.equal(store.get('products/co-topup-free-fire-latam--ff100').priceUsd, 0.84);
+  assert.equal(store.get('products/co-topup-free-fire-latam--ff100-locked-low').priceUsd, 0.84);
+  assert.equal(store.get('products/co-topup-free-fire-latam--ff100-locked-ok').priceUsd, 0.90);
+  assert.equal(store.get('products/co-topup-free-fire-latam--ffcard-week').priceUsd, 2.00);
+  assert.equal(store.get('products/co-topup-free-fire-latam--ffcard-week-locked').priceUsd, 2.00);
+  assert.equal(store.get('products/co-topup-free-fire-latam--ffcard-month').priceUsd, 8.00);
+  assert.equal(store.get('products/co-topup-free-fire-latam--ffbooyah').priceUsd, 1.43);
+  assert.equal(store.get('products/co-topup-free-fire-latam--ffbooyah-locked').priceUsd, 1.20);
+  assert.equal(store.get('products/co-topup-free-fire-latam--ffcard-lite').priceUsd, 0.82);
+  assert.equal(store.get('products/co-topup-free-fire-latam--fflvl6').priceUsd, 0.82);
+  assert.equal(store.get('products/co-topup-blood-strike-global--bs100').priceUsd, 0.82);
 });

@@ -44,10 +44,11 @@ import {
 } from '../config/firebase';
 import { asyncHandler } from '../lib/http';
 import { log } from '../lib/logger';
-import { applyMargin, round } from '../lib/money';
+import { applyMarginWithProfitFloor, round } from '../lib/money';
 import * as adminAlerts from '../services/adminAlerts';
 import * as catalog from '../services/catalog';
 import * as centralOne from '../services/centralOne';
+import { freeFireProductProfitPolicy } from '../services/centralOneCatalogSync';
 import {
   resolveCentralOneWebhookOrder,
   resolveFazerProcessingOrder,
@@ -374,7 +375,8 @@ export type CoProductState = Pick<
 export function productPatchFromChange(
   product: CoProductState,
   change: CoProductChange,
-  freshPrice: (costUsd: number) => number
+  freshPrice: (costUsd: number) => number,
+  profitFloorUsd = 0
 ): { patch: Partial<Product>; lossGuard: boolean } {
   const patch: Partial<Product> = {};
   let lossGuard = false;
@@ -383,8 +385,11 @@ export function productPatchFromChange(
   if (cost !== null && cost > 0) {
     if (round(cost, 4) !== round(product.costUsd ?? 0, 4)) patch.costUsd = round(cost, 4);
     const locked = product.priceLocked === true;
-    if (!locked || product.priceUsd <= 0 || cost > product.priceUsd) {
-      lossGuard = locked && product.priceUsd > 0 && cost > product.priceUsd;
+    const floor = Number.isFinite(profitFloorUsd) && profitFloorUsd > 0 ? profitFloorUsd : 0;
+    const minAllowedPrice = round(cost + floor, 4);
+    const belowMin = product.priceUsd > 0 && round(product.priceUsd, 4) < minAllowedPrice;
+    if (!locked || product.priceUsd <= 0 || belowMin) {
+      lossGuard = locked && belowMin;
       const next = freshPrice(cost);
       if (round(next, 2) !== round(product.priceUsd, 2)) patch.priceUsd = next;
     }
@@ -592,7 +597,6 @@ async function applyProductChanges(changes: CoProductChange[], occurredAt: strin
   const config = await getConfig();
   const margin = config.pricing.defaultMarginPercent;
   const roundStep = config.pricing.roundToUsd;
-  const freshPrice = (cost: number) => applyMargin(cost, margin, roundStep);
   // Se guarda tal cual llega (ISO) sólo si se entiende como fecha.
   const eventAt = occurredAt && eventMillis(occurredAt) !== null ? occurredAt : null;
   const timestamp = now();
@@ -639,6 +643,10 @@ async function applyProductChanges(changes: CoProductChange[], occurredAt: strin
       if (fresh.price !== 'fresh' && fresh.stock !== 'fresh') continue;
       const change = fresh.change;
 
+      const { profitFloorUsd, enforceFloorOnLocked } = freeFireProductProfitPolicy(data);
+      const lockedProfitFloorUsd = enforceFloorOnLocked ? profitFloorUsd : 0;
+      const freshPrice = (cost: number) =>
+        applyMarginWithProfitFloor(cost, margin, profitFloorUsd, roundStep);
       const { patch, lossGuard } = productPatchFromChange(
         {
           costUsd: Number(data.costUsd ?? 0),
@@ -653,15 +661,22 @@ async function applyProductChanges(changes: CoProductChange[], occurredAt: strin
             typeof data.consecutiveDispatchFailures === 'number' ? data.consecutiveDispatchFailures : 0,
         },
         change,
-        freshPrice
+        freshPrice,
+        lockedProfitFloorUsd
       );
       if (lossGuard) {
-        log.warn('Central One subió el costo por encima del precio fijado: se recalcula con margen', {
-          productId: doc.id,
-          costUsd: patch.costUsd ?? data.costUsd,
-          lockedPriceUsd: data.priceUsd,
-          priceUsd: patch.priceUsd ?? null,
-        });
+        log.warn(
+          lockedProfitFloorUsd > 0 && Number(data.priceUsd ?? 0) >= Number(patch.costUsd ?? data.costUsd ?? 0)
+            ? 'Central One dejó el precio fijado por debajo de costo + piso mínimo: se recalcula'
+            : 'Central One subió el costo por encima del precio fijado: se recalcula con margen',
+          {
+            productId: doc.id,
+            costUsd: patch.costUsd ?? data.costUsd,
+            profitFloorUsd: lockedProfitFloorUsd,
+            lockedPriceUsd: data.priceUsd,
+            priceUsd: patch.priceUsd ?? null,
+          }
+        );
       }
 
       // Aunque no cambie nada se adelanta el reloj de lo que traía el aviso:
